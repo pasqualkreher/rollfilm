@@ -1273,6 +1273,10 @@ export function CanvasEditor({
     [origin.x, origin.y, zoom]
   );
 
+  // Set by any zoom the user asked for, cleared by a fit: while the page is at
+  // its fitted size it follows the window (see the effect after zoomAt).
+  const zoomedByHand = useRef(false);
+
   // Zoom and scroll until one world rectangle fills the window.
   const fitRect = useCallback(
     (content: Rect) => {
@@ -1305,6 +1309,7 @@ export function CanvasEditor({
   const fitToView = useCallback(
     (all = false) => {
       if (!doc) return;
+      zoomedByHand.current = false;
       const content = boundsOf(items.map((item) => worldRect(item, doc)));
       if (all) {
         fitRect(
@@ -1381,6 +1386,7 @@ export function CanvasEditor({
       const el = viewportRef.current;
       if (!el) return;
       const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor));
+      zoomedByHand.current = true;
       if (next === zoom) return;
       const rect = el.getBoundingClientRect();
       // Keep whatever sits under the cursor under the cursor.
@@ -1394,6 +1400,32 @@ export function CanvasEditor({
     },
     [origin.x, origin.y, originAt, zoom]
   );
+
+  // The window (or the filmstrip, or the dock) changed the stage's size while
+  // the page was at its fitted size: it stays fitted. Scaled about the middle of
+  // the view rather than by fitToView, which would jump back to the first page
+  // from wherever the user is reading. A zoom by hand is left alone.
+  const followStage = useRef(() => {});
+  followStage.current = () => {
+    const el = viewportRef.current;
+    if (!el || !doc || zoomedByHand.current) return;
+    const content =
+      doc.page_mode === "pages"
+        ? { w: doc.page_width_mm, h: doc.page_height_mm }
+        : boundsOf(items.map((item) => worldRect(item, doc))) ?? { w: doc.page_width_mm, h: doc.page_height_mm };
+    const padding = 48;
+    const fit = Math.min(
+      (el.clientWidth - padding * 2) / Math.max(1, content.w),
+      (el.clientHeight - padding * 2) / Math.max(1, content.h)
+    );
+    zoomAt(fit / zoom);
+    zoomedByHand.current = false;
+  };
+  useEffect(() => {
+    if (!fitted.current || view.width === 0) return;
+    const frame = requestAnimationFrame(() => followStage.current());
+    return () => cancelAnimationFrame(frame);
+  }, [view.width, view.height]);
 
   // Scroll (never zoom) until a world rectangle is on screen. Anything the
   // canvas adds for the user goes through here, so a photo placed by a click is
@@ -3001,7 +3033,6 @@ export function CanvasEditor({
   // window in at least one direction. Both numbers are the ones on screen (the
   // surface at this zoom, the viewport's own client box), so this follows every
   // zoom and every resize without measuring anything of its own.
-  const canPan = origin.w > view.width + 1 || origin.h > view.height + 1;
   // How many sheets the guide draws: enough to hold everything on the canvas,
   // plus one empty one ahead to carry on into.
   const guideSheets =
@@ -3511,13 +3542,6 @@ export function CanvasEditor({
                 : "Drag a photo from the filmstrip onto the page to add it"}
             </div>
           )}
-        </div>
-        {/* Panning is the one canvas gesture with nothing on screen to point
-            at, so it is named in a quiet line under the stage - only while the
-            view actually has somewhere to go; at fit it would be a lie. The
-            line keeps its height either way so the stage doesn't jump. */}
-        <div className="canvas-pan-caption" aria-hidden={!canPan}>
-          {canPan ? "Hold Space and drag to move the view · Alt-drag does the same" : ""}
         </div>
         </div>
       </div>
@@ -4202,9 +4226,8 @@ function PageRail({
 
   return (
     <div className={`page-rail${carrying !== null ? " is-dragging" : ""}`} aria-label="Pages">
-      <div className="page-rail-head">
+      <div className="page-rail-head" title="Drag a page to reorder">
         Pages
-        <span className="page-rail-hint">Drag to reorder</span>
       </div>
 
       <div className="page-rail-list" ref={listRef}>
@@ -4961,7 +4984,7 @@ function CanvasToolbar({
         <button className="btn btn-sm" onClick={() => onZoom(1 / 1.2)} aria-label="Zoom out" title="Zoom out (−)">
           <IconMinus size={14} />
         </button>
-        <span className="canvas-zoom-readout" title="Size on screen compared to the printed size">
+        <span className="canvas-zoom-readout" title="Size on screen compared to the printed size. Hold Space and drag, or Alt-drag, to move the view.">
           {Math.round((zoom * 100) / 3.78)}%
         </span>
         <button className="btn btn-sm" onClick={() => onZoom(1.2)} aria-label="Zoom in" title="Zoom in (+)">
@@ -5673,7 +5696,13 @@ function Filmstrip({
         </div>
       )}
       <div className="canvas-filmstrip-head">
-        <button className="btn btn-sm ghost canvas-filmstrip-toggle" onClick={onToggle}>
+        <button
+          className="btn btn-sm ghost canvas-filmstrip-toggle"
+          onClick={onToggle}
+          title={`${
+            remaining === 0 ? "All photos are on the canvas." : `${remaining} not on the canvas yet.`
+          } Drag a photo onto a page; it takes the free space where it lands.`}
+        >
           <span className="canvas-filmstrip-caret" style={{ transform: open ? "rotate(180deg)" : "none" }}>
             <IconChevronDown size={13} />
           </span>
@@ -5682,18 +5711,11 @@ function Filmstrip({
         <button
           className="btn btn-sm ghost canvas-filmstrip-pick"
           onClick={onAutoPick}
+          disabled={images.length === 0}
           title="Find photos in your library that go with this canvas, or with a selected photo"
         >
           <IconSparkle size={13} /> Find similar…
         </button>
-        {open && images.length > 0 && (
-          <span className="canvas-filmstrip-note">
-            {remaining === 0
-              ? "All photos are on the canvas."
-              : `${remaining} not on the canvas yet.`}{" "}
-            Drag a photo onto a page; it takes the free space where it lands.
-          </span>
-        )}
         {backButton}
       </div>
     </div>

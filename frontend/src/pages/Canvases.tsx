@@ -59,7 +59,7 @@ export function Canvases() {
   useScrollMemory(pageRef, "canvases", { ready: !!canvases });
 
   const createCanvas = useMutation({
-    mutationFn: () => api.canvases.create(name.trim() || "Canvas"),
+    mutationFn: () => api.canvases.create(name.trim()),
     onSuccess: (created) => {
       setName("");
       queryClient.invalidateQueries({ queryKey: ["canvas-list"] });
@@ -70,6 +70,7 @@ export function Canvases() {
     // has to read (the typed name stays in the box to adjust).
     onError: (e) => void dialogs.alert({ title: "Canvas not created", message: errorText(e) }),
   });
+  const canCreate = Boolean(name.trim()) && !createCanvas.isPending;
 
   async function renameCanvas(canvas: CanvasSummary) {
     // window.prompt is a no-op in Electron - the app-skinned dialog is the
@@ -134,11 +135,11 @@ export function Canvases() {
             value={name}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") createCanvas.mutate();
+              if (event.key === "Enter" && canCreate) createCanvas.mutate();
             }}
           />
         </label>
-        <button className="btn primary" onClick={() => createCanvas.mutate()} disabled={createCanvas.isPending}>
+        <button className="btn primary" onClick={() => createCanvas.mutate()} disabled={!canCreate}>
           <IconPlus size={14} /> Create canvas
         </button>
       </div>
@@ -146,10 +147,7 @@ export function Canvases() {
       {isLoading ? (
         <LoadingState />
       ) : !canvases || canvases.length === 0 ? (
-        <div className="empty-state">
-          No canvases yet. Create one above, then select photos in the library and choose
-          &ldquo;Add to canvas&rdquo;.
-        </div>
+        <div className="empty-state">No canvases yet.</div>
       ) : (
         <div className="canvas-list">
           {canvases.map((canvas) => (

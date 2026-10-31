@@ -42,6 +42,7 @@ import { useMergePairs } from "../state/viewPrefs";
 import { SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
 import { useEditCopies } from "../utils/useEditCopies";
 import { shortcutLabel, useSelectionKeys } from "../utils/selection";
+import { useLearnLibraryKinds, useLibraryKinds } from "../state/libraryKinds";
 import { useBarHeight } from "../utils/useBarHeight";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import type { ContextActions } from "../components/PhotoContextMenu";
@@ -344,6 +345,15 @@ function LibraryPage() {
   });
 
   const images: GridImage[] | undefined = q ? searchQuery.data : indexQuery.data?.images;
+  // What the library holds at all decides whether the merge toggle and the file
+  // type filter are offered. Whole library: every filter above at its resting
+  // value (view_mode "combined" returns both kinds), and the rows really this
+  // answer rather than the previous filter's held on screen.
+  const libraryKinds = useLibraryKinds();
+  const isWholeLibrary =
+    !indexQuery.isPlaceholderData &&
+    Object.entries(filters).every(([k, v]) => (k === "view_mode" ? v === "combined" : v === undefined));
+  useLearnLibraryKinds(indexQuery.isPlaceholderData ? undefined : indexQuery.data?.images, isWholeLibrary);
   const isLoading = q ? searchQuery.isLoading : indexQuery.isLoading;
   // A load that failed is not an empty library, and must not be shown as one.
   // (A failed REFETCH keeps the grid it already had - that is not this.)
@@ -1011,6 +1021,8 @@ function LibraryPage() {
       <PhotoFilters
         viewMode={viewMode}
         onViewMode={setViewMode}
+        showMerge={libraryKinds.pairs}
+        showViewMode={(libraryKinds.raw && libraryKinds.other) || viewMode !== "combined"}
         ratingMin={ratingMin}
         onRatingMin={setRatingMin}
         colorLabel={colorLabel}

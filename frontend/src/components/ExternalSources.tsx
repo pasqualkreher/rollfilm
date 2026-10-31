@@ -92,10 +92,6 @@ export function ExternalSources() {
 
   return (
     <section className="settings-section">
-      <p className="import-panel-desc">
-        Show photos from a folder, such as a NAS, without copying them. Sources are scanned at
-        startup and when you click scan. Folders left in place by an import scan only on request.
-      </p>
       <div className="import-toolbar import-toolbar--wrap">
         <input
           type="text"

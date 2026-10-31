@@ -1,11 +1,11 @@
 import { isModalOpen } from "../utils/modalKeys";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useId, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
+import { Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useId, useRef, useState, useSyncExternalStore, type ComponentProps, type ProfilerOnRenderCallback, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, editVersion, editsFromApi, saveDownload, type ServedBlob } from "../api/client";
 import type { CropBox, ImageOut } from "../api/types";
-import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconCurve, IconDetail, IconDuplicate, IconEye, IconEyeOff, IconExport, IconFilmRoll, IconFlipH, IconFlipV, IconHeal, IconImage, IconMask, IconPalette, IconPlus, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSparkle, IconSplit, IconSun, IconTarget, IconTone, IconTrash, IconTube, IconUndo, IconX, IconRestore, IconHistory } from "./Icons";
+import { IconBookmark, IconBulb, IconCamera, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconCloud, IconCrop, IconDuplicate, IconEye, IconEyeOff, IconExport, IconFlipH, IconFlipV, IconImage, IconPlus, IconRedo, IconRotate, IconSave, IconSaveCopy, IconShade, IconSideBySide, IconSplit, IconSun, IconTarget, IconTrash, IconTube, IconUndo, IconX, IconRestore, IconHistory } from "./Icons";
 import { SpotOverlay } from "./SpotOverlay";
 import { MenuButton, type MenuButtonHandle, type MenuEntry } from "./MenuButton";
 import { MaskPins } from "./MaskPins";
@@ -29,7 +29,6 @@ import {
   withFilmSim,
   withCalibration,
   processForCurrentLooks,
-  CURRENT_PROCESS,
   MASK_ADJUST_FIELDS,
   MASK_LIMIT_TYPES,
   MASK_SUBJECTS,
@@ -165,7 +164,7 @@ interface DragRect {
 // The live preview is rendered *server-side* by the exact save pipeline
 // (POST /images/:id/editor-preview), debounced per edit change - one
 // implementation of every effect, preview always identical to the save.
-type GridOverlay = "none" | "thirds" | "grid" | "diagonal";
+type GridOverlay = "none" | "thirds" | "grid" | "fine" | "diagonal";
 // Labels are what follows the row's own "Grid" label, so none of them repeats
 // it - the select used to read "Grid: Grid", which says nothing about which
 // grid it is.
@@ -173,6 +172,7 @@ const GRID_OPTIONS: { value: GridOverlay; label: string }[] = [
   { value: "none", label: "None" },
   { value: "thirds", label: "Rule of thirds" },
   { value: "grid", label: "Square grid" },
+  { value: "fine", label: "Fine grid" },
   { value: "diagonal", label: "Diagonals" },
 ];
 // `wide`: stored as +-200 and shown as +-100, like the global Saturation
@@ -267,19 +267,6 @@ const TOOL_GROUP: Record<Exclude<Tool, "none">, string> = {
 const GROUP_ORDER = ["transform", "filmsim", "basic", "curves", "color", "details", "effects", "masks", "retouch", "presets"];
 // The keys that open the groups, in the same order: 1..9, then 0 for the tenth.
 const SECTION_KEY_ORDER = GROUP_ORDER.map((_, i) => String((i + 1) % 10));
-// The icon in front of each group's title in the panel.
-const GROUP_ICON: Record<string, (p: { size?: number }) => JSX.Element> = {
-  transform: IconCrop,
-  filmsim: IconFilmRoll,
-  basic: IconTone,
-  curves: IconCurve,
-  color: IconPalette,
-  details: IconDetail,
-  effects: IconSparkle,
-  masks: IconMask,
-  retouch: IconHeal,
-  presets: IconBookmark,
-};
 
 // Curves: the four channels share the same key set across point + parametric
 // curves. Each carries a display colour for its graph line / dot.
@@ -409,8 +396,40 @@ function normalizeRect(r: DragRect): CropBox {
   };
 }
 
+// The fine grid's one 80px tile: four minor lines each way, the major pair on
+// its edges, so the grid can be counted at a glance.
+const FINE_GRID_MINOR = "M16 0V80M32 0V80M48 0V80M64 0V80M0 16H80M0 32H80M0 48H80M0 64H80";
+const FINE_GRID_MAJOR = "M0 0V80M0 0H80";
+
+// For judging a horizon to a fraction of a degree. In screen pixels rather than
+// the other grids' stretched 0-100 box, so the cells are square on any photo.
+// Each line is a dark one beside a light one, which reads on sky and on shadow
+// alike without a filter repainting the whole frame.
+function FineGrid() {
+  const tones: [string, string, string][] = [
+    ["rgba(0,0,0,0.28)", "rgba(0,0,0,0.5)", "none"],
+    ["rgba(255,255,255,0.22)", "rgba(255,255,255,0.4)", "translate(0.5 0.5)"],
+  ];
+  return (
+    <svg className="editor-grid-overlay editor-grid-overlay--fine" aria-hidden>
+      <defs>
+        <pattern id="editor-fine-grid" width={80} height={80} patternUnits="userSpaceOnUse">
+          {tones.map(([minor, major, transform]) => (
+            <g key={minor} fill="none" strokeWidth={0.5} shapeRendering="crispEdges" transform={transform}>
+              <path d={FINE_GRID_MINOR} stroke={minor} />
+              <path d={FINE_GRID_MAJOR} stroke={major} />
+            </g>
+          ))}
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#editor-fine-grid)" />
+    </svg>
+  );
+}
+
 function GridLines({ type }: { type: GridOverlay }) {
   if (type === "none") return null;
+  if (type === "fine") return <FineGrid />;
   // Dark grey lines (with a faint light edge from CSS drop-shadow) so the
   // composition guides stay subtle and readable over most photos.
   const stroke = "rgba(40,40,46,0.7)";
@@ -477,7 +496,10 @@ function Slider({
   headExtra,
   groupStart,
   swatch,
+  onActiveChange,
 }: {
+  // The slider is being moved right now, by the pointer or the arrow keys.
+  onActiveChange?: (on: boolean) => void;
   label: string;
   value: number;
   onChange: (v: number) => void;
@@ -608,11 +630,27 @@ function Slider({
           step={step}
           value={uiValue}
           onChange={(e) => queueChange(Number(e.target.value) * uiScale)}
+          onPointerDown={
+            onActiveChange &&
+            (() => {
+              onActiveChange(true);
+              // On the window: a drag is usually let go beside the slider.
+              const end = () => {
+                window.removeEventListener("pointerup", end);
+                window.removeEventListener("pointercancel", end);
+                onActiveChange(false);
+              };
+              window.addEventListener("pointerup", end);
+              window.addEventListener("pointercancel", end);
+            })
+          }
+          onKeyUp={onActiveChange && (() => onActiveChange(false))}
           onDoubleClick={() => {
             pendingRef.current = null; // the reset must not be overwritten by a queued drag value
             onChange(resetValue);
           }}
           onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") onActiveChange?.(true);
             // Up/down walk the slider list; left/right keep the native "nudge
             // the value" behaviour of a focused range input, unless the
             // slider brings its own step.
@@ -645,7 +683,10 @@ function Slider({
             e.preventDefault();
             focusAdjacentSlider(e.currentTarget, e.key === "ArrowDown" ? 1 : -1);
           }}
-          onBlur={applyTyped}
+          onBlur={() => {
+            onActiveChange?.(false);
+            applyTyped();
+          }}
           title="Double-click to reset. Click and type a number to set the value."
         />
       </span>
@@ -849,6 +890,36 @@ function ClipToggle({ store, on, onToggle }: { store: HistStore; on: boolean; on
       <span className={`editor-clip-mark highlights${clipped(255) ? " lit" : ""}`} aria-hidden />
     </button>
   );
+}
+
+// Dev-only commit profiler (localStorage.pmProfile = "1", then reload): wraps
+// the editor body in <Profiler>, which renders no element. Read the numbers
+// with window.__editorProfile.summary() (returns and resets).
+const PROFILE =
+  import.meta.env.DEV &&
+  (() => {
+    try {
+      return localStorage.getItem("pmProfile") === "1";
+    } catch {
+      return false;
+    }
+  })();
+type ProfileSample = { phase: string; actualDuration: number; baseDuration: number; t: number };
+const profileSamples: ProfileSample[] = [];
+const profileCommit: ProfilerOnRenderCallback = (_id, phase, actualDuration, baseDuration) => {
+  profileSamples.push({ phase, actualDuration, baseDuration, t: performance.now() });
+};
+if (PROFILE) {
+  (window as unknown as { __editorProfile: unknown }).__editorProfile = {
+    samples: profileSamples,
+    summary() {
+      const d = profileSamples.filter((x) => x.phase !== "mount").map((x) => x.actualDuration).sort((x, y) => x - y);
+      const at = (q: number) => (d.length ? d[Math.min(d.length - 1, Math.floor(q * d.length))] : 0);
+      const out = { commits: d.length, median: at(0.5), p95: at(0.95), max: d.length ? d[d.length - 1] : 0, totalMs: d.reduce((x, y) => x + y, 0), mounts: profileSamples.length - d.length };
+      profileSamples.length = 0;
+      return out;
+    },
+  };
 }
 
 export function PhotoEditor({ image, onClose, docked = false, closing = false, onPreviewFrame, onEditsSettled, maskHost = null }: Props) {
@@ -1363,6 +1434,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   // curve as it was at pointerdown instead of compounding.
   const curvePickDrag = useRef<{ x: number; clientY: number; baseY: number; baseParam: number[] } | null>(null);
   const [gridOverlay, setGridOverlay] = useState<GridOverlay>("none");
+  // While Straighten moves, the fine grid stands in for whatever is chosen: a
+  // horizon can't be judged against four lines. The choice itself stays.
+  const [straightening, setStraightening] = useState(false);
+  const shownGrid: GridOverlay = straightening ? "fine" : gridOverlay;
   const [presets, setPresets] = useState<Record<string, EditPreset>>(() => loadPresets());
   // The presets come from the library's database (utils/presets): the list
   // follows when they arrive, and when another view changes them.
@@ -3833,6 +3908,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
       return { ...a, parametric_curve };
     });
   }
+  function curveIsReset() {
+    if (adj.curve_mode === "point") {
+      const pts = adj.point_curves[curveChannel];
+      return pts.length === 2 && pts[0][0] === 0 && pts[0][1] === 0 && pts[1][0] === 255 && pts[1][1] === 255;
+    }
+    return Object.values(adj.parametric_curve[curveChannel]).every((v) => v === 0);
+  }
   function resetCurve() {
     if (adj.curve_mode === "point") {
       setPointCurve(curveChannel, [
@@ -5354,13 +5436,13 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         }}
       >
         <span className="editor-accordion-title">
-          {GROUP_ICON[id]?.({ size: 14 })}
+          <span className={`editor-accordion-caret${open ? " open" : ""}`} aria-hidden />
           {title}
           {edited[id] && <span className="editor-edited-dot" title="This group contains edits" />}
         </span>
         {/* Back to the defaults for this section only (undo brings it back).
             The slot is there on every header, shown only where there is
-            something to reset, so the caret never moves. */}
+            something to reset, so the row never changes. */}
         <button
           type="button"
           className="editor-section-reset"
@@ -5375,9 +5457,6 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         >
           <IconRestore size={12} />
         </button>
-        <span className={`editor-accordion-caret${open ? " open" : ""}`} aria-hidden>
-          ›
-        </span>
       </div>
     );
   }
@@ -5479,9 +5558,10 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           </button>
           <button
             className="btn btn-sm ghost"
-            disabled={isBase}
+            style={isBase ? { visibility: "hidden" } : undefined}
+            tabIndex={isBase ? -1 : undefined}
             onClick={() => removeShape(idx)}
-            title={isBase ? "The mask's own component stays - delete the mask instead" : "Remove this component"}
+            title="Remove this component"
           >
             Remove
           </button>
@@ -5538,7 +5618,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
   ];
   const maskMenuRefs = useRef(new Map<string, MenuButtonHandle>());
 
-  return (
+  const editorRoot = (
     <div
       className={`editor-overlay${docked ? " editor-overlay--docked" : ""}${closing ? " editor-overlay--closing" : ""}${
         panelOpen || docked ? "" : " editor-overlay--panel-hidden"
@@ -5977,7 +6057,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
             >
               {/* The composition grid lives INSIDE the crop box while cropping -
                   it guides the frame being composed, not the discarded area. */}
-              <GridLines type={gridOverlay} />
+              <GridLines type={shownGrid} />
               {/* Visual handles only - hit-testing happens on the canvas so the
                   handles stay pointer-transparent and the drag never breaks. */}
               <span className="crop-handle nw" />
@@ -5996,7 +6076,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           )}
           {/* While a crop is being drawn the grid renders inside the crop box
               instead (see above) - never both at once. */}
-          {!zoomed && !(cropMode && hasDrawnCrop) && <GridLines type={gridOverlay} />}
+          {!zoomed && !(cropMode && hasDrawnCrop) && <GridLines type={shownGrid} />}
           {/* Selected-mask guide + editable handles, transformed to track the
               canvas under zoom/pan. aspect keeps the round handles round on
               non-square images; cursor draws the brush-size ring. */}
@@ -6240,7 +6320,6 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           }
         >
           Edit
-          <span className="editor-head-sub">non-destructive</span>
         </h3>
 
         {/* The histogram belongs to the photo, not to any one group of
@@ -6423,6 +6502,7 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                   label="Straighten"
                   value={straighten}
                   onChange={setStraighten}
+                  onActiveChange={setStraightening}
                   min={-45}
                   max={45}
                   step={0.25}
@@ -6600,21 +6680,6 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
           {accordionHeader("basic", "Tone")}
           {openGroup === "basic" && (
             <div className="editor-accordion-body">
-              {/* An edit made under an older process version keeps rendering
-                  the way it did; bringing it up to the current one is a
-                  choice (undoable, and the compare shows the difference). */}
-              {adj.process !== CURRENT_PROCESS && (
-                <div className="editor-process-note">
-                  <span>Made with process {adj.process}; the current one is {CURRENT_PROCESS}.</span>
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => setAdj((a) => ({ ...a, process: CURRENT_PROCESS }))}
-                    title="Render this edit with the current process. Undo goes back."
-                  >
-                    Update
-                  </button>
-                </div>
-              )}
               {/* Base transfer curve the tonal sliders ride on. Laid out like a
                   slider's head - name left, the choice where a value sits - so it
                   reads as the first row of the column, not a box above it. */}
@@ -6730,7 +6795,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
                     Parametric
                   </button>
                 </span>
-                <button className="btn btn-sm ghost" onClick={resetCurve} title="Reset the active channel">
+                <button
+                  className="btn btn-sm ghost"
+                  onClick={resetCurve}
+                  disabled={curveIsReset()}
+                  title="Reset the active channel"
+                >
                   Reset
                 </button>
               </div>
@@ -7694,5 +7764,12 @@ export function PhotoEditor({ image, onClose, docked = false, closing = false, o
         document.body
       )}
     </div>
+  );
+  return PROFILE ? (
+    <Profiler id="editor" onRender={profileCommit}>
+      {editorRoot}
+    </Profiler>
+  ) : (
+    editorRoot
   );
 }

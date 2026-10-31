@@ -13,11 +13,12 @@ import { IconCheck, IconExport, IconImport, IconRename, IconX } from "../compone
 import { tagTreeRows } from "../utils/tagPaths";
 import { useAppDialogs } from "../components/AppDialogs";
 import { skinInfo, useAppearance, type Appearance } from "../state/theme";
-import { useCorners } from "../state/corners";
 import { FONTS, useFont } from "../state/fonts";
 import { useTasks } from "../state/tasks";
 import {
   useAskDeletePartner,
+  useTileRatings,
+  setTileRatings,
   setAskDeletePartner,
   EDITOR_WORK_RES,
   useEditorWorkRes,
@@ -165,7 +166,6 @@ function ThemeSummaryPreview({ appearance }: { appearance: Appearance }) {
 
 function AppearanceSetting() {
   const appearance = useAppearance();
-  const [corners, setCorners] = useCorners();
   const [font, setFont] = useFont();
   const [open, setOpen] = useState(false);
 
@@ -199,31 +199,6 @@ function AppearanceSetting() {
         <button className="btn" onClick={() => setOpen(true)}>
           Change appearance…
         </button>
-      </div>
-
-      <div className="settings-corners">
-        <span className="settings-option-body">
-          <strong>Corners</strong>
-          <span className="settings-option-desc">
-            Rounded or sharp, angular corners on cards, buttons and thumbnails.
-          </span>
-        </span>
-        <span className="segmented">
-          <button
-            className={corners === "rounded" ? "active" : ""}
-            aria-pressed={corners === "rounded"}
-            onClick={() => setCorners("rounded")}
-          >
-            Rounded
-          </button>
-          <button
-            className={corners === "square" ? "active" : ""}
-            aria-pressed={corners === "square"}
-            onClick={() => setCorners("square")}
-          >
-            Square
-          </button>
-        </span>
       </div>
 
       <div className="settings-fonts">
@@ -336,6 +311,7 @@ export function Settings() {
   // Whether deleting a paired photo asks "only this file or the whole pair?".
   // Client-side view preference (see viewPrefs), not a server setting.
   const askDeletePartner = useAskDeletePartner();
+  const tileRatings = useTileRatings();
   const editorWorkRes = useEditorWorkRes();
 
   // The open tab. sectionProps stays the single indirection every section call
@@ -957,17 +933,7 @@ export function Settings() {
 
   return (
     <div className="page settings-page" ref={pageRef}>
-      <h2 className="section-title">
-        Settings
-        <button
-          className="btn subtle"
-          style={{ marginLeft: 12 }}
-          onClick={() => setTourOpen(true)}
-          title="A short guided tour of the settings"
-        >
-          Show me around
-        </button>
-      </h2>
+      <h2 className="section-title">Settings</h2>
 
       <nav className="settings-tabs" role="tablist" aria-label="Settings sections">
         {SETTINGS_TABS.map((tab) => (
@@ -981,10 +947,26 @@ export function Settings() {
             {tab.label}
           </button>
         ))}
+        <span className="settings-tabs-trailing">
+          <button
+            className="btn btn-sm subtle"
+            onClick={() => setTourOpen(true)}
+            title="A short guided tour of the settings"
+          >
+            Show me around
+          </button>
+        </span>
       </nav>
 
       <Section {...sectionProps("Appearance")}>
         <AppearanceSetting />
+        <OptionRow
+          type="checkbox"
+          checked={tileRatings}
+          onChange={setTileRatings}
+          title="Show ratings on every tile"
+          desc="Stars, flag and color label stay visible in the grid. Otherwise they appear under the pointer and on selected photos."
+        />
       </Section>
 
       {desktop?.changeLibraryRoot && (
@@ -1242,7 +1224,7 @@ export function Settings() {
           <strong>Save copy</strong> creates a new photo from your edits. A physical copy is a new
           JPEG. A virtual copy shares the original file and keeps only its edits.
         </Desc>
-        <div className="settings-corners">
+        <div className="settings-choice-row">
           <span className="settings-option-body">
             <strong>Working resolution</strong>
             <span className="settings-option-desc">
@@ -1356,7 +1338,11 @@ export function Settings() {
                         { onSuccess: () => setRadiusSaved(true) }
                       );
                     }}
-                    disabled={placeRadius === "" || saveSmartAlbums.isPending}
+                    disabled={
+                      placeRadius === "" ||
+                      parseFloat(placeRadius) === smartAlbumSettings?.place_radius_km ||
+                      saveSmartAlbums.isPending
+                    }
                   >
                     {saveSmartAlbums.isPending ? "Saving…" : "Save"}
                   </button>
@@ -1529,7 +1515,9 @@ export function Settings() {
           <button
             className="btn primary"
             onClick={() => saveTrash.mutate()}
-            disabled={trashDays === "" || saveTrash.isPending}
+            disabled={
+              trashDays === "" || parseInt(trashDays, 10) === trashSettings?.retention_days || saveTrash.isPending
+            }
           >
             {saveTrash.isPending ? "Saving…" : "Save"}
           </button>

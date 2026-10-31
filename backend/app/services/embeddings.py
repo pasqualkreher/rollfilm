@@ -280,22 +280,35 @@ def get_embeddings(engine: Engine, image_ids: list[str]) -> dict[str, np.ndarray
 _MAX_KNN_K = 4096
 
 
-def query_similar(engine: Engine, vector: np.ndarray, k: int, exclude_id: str | None = None) -> list[tuple[str, float]]:
+def query_similar(
+    engine: Engine,
+    vector: np.ndarray,
+    k: int,
+    exclude_id: str | None = None,
+    min_distance: float | None = None,
+) -> list[tuple[str, float]]:
+    # min_distance skips everything nearer than it inside the query, so the k
+    # nearest beyond it come back rather than k hits a later filter would empty.
     # Over-fetch slightly so we can drop exclude_id (e.g. the query image
     # itself) without going back for another page.
     fetch_k = k + 1 if exclude_id else k
     fetch_k = min(fetch_k, _MAX_KNN_K)
+    params = {"embedding": sqlite_vec.serialize_float32(vector.tolist()), "k": fetch_k}
+    beyond = ""
+    if min_distance is not None:
+        beyond = "AND distance >= :min_distance"
+        params["min_distance"] = min_distance
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                """
+                f"""
                 SELECT id, distance
                 FROM image_embeddings
-                WHERE embedding MATCH :embedding AND k = :k
+                WHERE embedding MATCH :embedding AND k = :k {beyond}
                 ORDER BY distance
                 """
             ),
-            {"embedding": sqlite_vec.serialize_float32(vector.tolist()), "k": fetch_k},
+            params,
         ).fetchall()
 
     results = [(row[0], row[1]) for row in rows if row[0] != exclude_id]

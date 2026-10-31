@@ -1216,6 +1216,12 @@ class AutoPickRequest(BaseModel):
     # Cosine floor (0..1): hits less alike than this are left out, so fewer
     # than ``count`` may come back. None = no floor.
     min_similarity: float | None = None
+    # Cosine ceiling (0..1): hits more alike than this are left out, which
+    # skips near-duplicates. None = no ceiling.
+    max_similarity: float | None = None
+    # A phrase the photos should also lean toward ("bauhaus style"), counted
+    # as much as the reference. None = the reference alone.
+    query: str | None = None
 
 
 class PickCoreRequest(BaseModel):

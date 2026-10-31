@@ -50,7 +50,6 @@ import {
   IconLeave,
   IconMinus,
   IconPlus,
-  IconRotate,
   IconStop,
   IconX,
 } from "../components/Icons";
@@ -184,10 +183,25 @@ export function ImportWizard() {
   // The native pickers: adding to a session needs paths the backend can read,
   // which a browser file input can't give.
   const nativePick = typeof window !== "undefined" ? window.photoManager : undefined;
-  const overviewTabs: { id: OverviewTab; label: string }[] = [
+  // What each way does is in its tooltip; the page only carries the controls.
+  const overviewTabs: { id: OverviewTab; label: string; title?: string }[] = [
     { id: "source", label: "Card or folder" },
-    ...(nativePick?.pickFolder ? [{ id: "library" as const, label: "Library" }] : []),
-    { id: "external", label: "External sources" },
+    ...(nativePick?.pickFolder
+      ? [
+          {
+            id: "library" as const,
+            label: "Library",
+            title:
+              "Merge another Rollfilm library into this one. Ratings, labels, edits, tags and albums come along. The other library is only read.",
+          },
+        ]
+      : []),
+    {
+      id: "external",
+      label: "External sources",
+      title:
+        "Show photos from a folder, such as a NAS, without copying them. Sources are scanned at startup and when you click scan. Folders left in place by an import scan only on request.",
+    },
   ];
   // The session leaves its photos where they are: nothing is copied, so the
   // review says "reading"/"adding" where it otherwise says "copying".
@@ -510,6 +524,9 @@ export function ImportWizard() {
   });
 
   const filesById = useMemo(() => new Map((files ?? []).map((f) => [f.id, f])), [files]);
+  // Photos still coming in, or not yet checked: what the session holds isn't
+  // known, so the bar's session-dependent controls stay until it is.
+  const sessionStillArriving = isLoading || stagingInBackground || analysisPending;
 
 
   // Merged view shows only the JPEG of a pair, so a change mirrors onto the
@@ -1544,6 +1561,7 @@ export function ImportWizard() {
                   role="tab"
                   aria-selected={overviewTab === tab.id}
                   className={`settings-tab${overviewTab === tab.id ? " active" : ""}`}
+                  title={tab.title}
                   onClick={() => setOverviewTab(tab.id)}
                 >
                   {tab.label}
@@ -1693,23 +1711,34 @@ export function ImportWizard() {
         dateTo={dateTo}
         onDateFrom={setDateFrom}
         onDateTo={setDateTo}
+        showMerge={sessionStillArriving || (files ?? []).some((f) => Boolean(f.paired_staged_file_id))}
+        showViewMode={
+          sessionStillArriving ||
+          viewMode !== "combined" ||
+          ((files ?? []).some((f) => f.file_type === "raw") && (files ?? []).some((f) => f.file_type !== "raw"))
+        }
         viewExtras={
           // A toggle chip like its neighbours rather than a checkbox label:
           // the same height and on-state as every other toggle in the bar.
           // data-label reserves the chip's bold width, so turning it on
-          // doesn't push the Filter chip along.
-          <button
-            type="button"
-            className={`toggle-chip toggle-chip--steady toggle-chip--iconlabel${hideDuplicates ? " active" : ""}`}
-            aria-pressed={hideDuplicates}
-            onClick={() => setHideDuplicates(!hideDuplicates)}
-            title="Hide photos that are already in the library"
-            data-label="Hide duplicates"
-          >
-            <span className="toggle-chip-row">
-              <IconDuplicate size={14} /> Hide duplicates
-            </span>
-          </button>
+          // doesn't push the Filter chip along. Left out of a session with
+          // no duplicates; while photos are still arriving or being checked
+          // the answer isn't in yet, and the bar should not change under
+          // someone already reviewing.
+          (sessionStillArriving || (files ?? []).some(isDuplicate)) && (
+            <button
+              type="button"
+              className={`toggle-chip toggle-chip--steady toggle-chip--iconlabel${hideDuplicates ? " active" : ""}`}
+              aria-pressed={hideDuplicates}
+              onClick={() => setHideDuplicates(!hideDuplicates)}
+              title="Hide photos that are already in the library"
+              data-label="Hide duplicates"
+            >
+              <span className="toggle-chip-row">
+                <IconDuplicate size={14} /> Hide duplicates
+              </span>
+            </button>
+          )
         }
         // A session can collect from more than one card or folder - add the
         // next one without leaving the review: one menu at the bar's far end,
@@ -1898,8 +1927,8 @@ export function ImportWizard() {
           />
           {/* Only shown when Immich is configured in Settings - an inert greyed
               checkbox is just clutter for everyone who doesn't use Immich. In
-              selective/full sync modes the per-import checkbox is replaced by a
-              status chip, since uploads are driven by the sync mode instead. */}
+              full sync mode there is no control at all, since uploads are driven
+              by the sync mode instead. */}
           {immichConfigured && immichMode === "manual" && (
             <ImmichSyncToggle
               on={uploadToImmich}
@@ -1914,14 +1943,6 @@ export function ImportWizard() {
               onToggle={setSyncAllToImmich}
               title="Mark every imported photo for Immich sync. RAW files only if enabled in Settings."
             />
-          )}
-          {immichConfigured && immichMode === "full" && (
-            <span
-              className="filter-field filter-field-inline status-note"
-              title="Change this under Settings → Immich integration → Sync mode"
-            >
-              <IconRotate size={13} /> Immich full sync is on. Every imported photo is uploaded automatically.
-            </span>
           )}
           <span className="bar-sep" aria-hidden="true" />
           {/* Always there, switched off rather than hidden when there is

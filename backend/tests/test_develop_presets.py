@@ -3,7 +3,9 @@
 only some sections of a look - the rest of the photo's edit stays."""
 
 import json
+import re
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -192,6 +194,15 @@ def test_choosing_a_look_moves_the_process_like_the_editor():
     assert develop.merge_sections(on_one, look, ["film"])["process"] == "1"
     # Other sections never move the process of an edited photo.
     assert develop.merge_sections(on_five_neutral_calibration, look, ["tone"])["process"] == "5"
+
+
+def test_the_editor_knows_every_process_version():
+    # A version normalizeAdjustments does not know counts as "no key": a preset
+    # on it came out of the database as process 1 (v0.2.3, process 8).
+    source = (Path(__file__).parents[2] / "frontend/src/utils/adjustments.ts").read_text()
+    versions = re.search(r"PROCESS_VERSIONS = \[(.*?)\]", source).group(1)
+    assert tuple(re.findall(r'"(\d+)"', versions)) == develop.ENUM_SPEC["process"][1]
+    assert f'CURRENT_PROCESS: ProcessVersion = "{develop.CURRENT_PROCESS}"' in source
 
 
 def test_bulk_apply_with_sections_keeps_the_rest(db, monkeypatch):

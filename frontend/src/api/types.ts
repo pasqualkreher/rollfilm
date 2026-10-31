@@ -702,6 +702,10 @@ export interface AutoPickRequest {
   country?: string | null;
   // Cosine floor 0..1; fewer than `count` may come back.
   min_similarity?: number | null;
+  // Cosine ceiling 0..1: leaves out what is more alike, such as near-duplicates.
+  max_similarity?: number | null;
+  // A phrase the photos should also lean toward ("bauhaus style").
+  query?: string | null;
 }
 
 export type ImmichSyncMode = "manual" | "selective" | "full";

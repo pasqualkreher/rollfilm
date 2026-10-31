@@ -104,6 +104,15 @@ declare global {
        * those keys. Returns the unsubscribe. Absent in older builds.
        */
       onAppMenu?: (callback: (msg: { action: string; value?: string | number }) => void) => () => void;
+      /** What the File and Photo menu items can act on right now; the rest grey out. Absent in older builds. */
+      setMenuTargets?: (targets: {
+        rate?: boolean;
+        color?: boolean;
+        flag?: boolean;
+        edit?: boolean;
+        export?: boolean;
+        trash?: boolean;
+      }) => void;
       /**
        * Drags these originals out to the Finder / Explorer as real files. Call
        * it from dragstart (after preventDefault). The shell drops the whole

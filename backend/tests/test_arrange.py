@@ -104,6 +104,40 @@ def test_pick_by_reference_prefers_the_references_cluster_and_keeps_order():
     assert pick_by_reference(refs, [], np.zeros((0, 16)), 3) == []
 
 
+def test_pick_by_reference_and_text_counts_both_equally():
+    from app.services.arrange import pick_by_reference_and_text
+
+    # Axis 0 is the reference, axis 1 the phrase.
+    ref = np.array([[1.0, 0.0, 0.0]])
+    text = np.array([0.0, 1.0, 0.0])
+    ids = ["both", "photo-only", "text-only", "neither"]
+    vecs = np.array(
+        [
+            [0.7, 0.7, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    picked = pick_by_reference_and_text(ref, text, ids, vecs, 4)
+    assert [i for i, _ in picked][0] == "both"
+    assert [i for i, _ in picked][-1] == "neither"
+    # The distance stays the one to the reference, whatever the rank.
+    assert dict(picked)["photo-only"] == 0.0
+    assert np.isclose(dict(picked)["neither"], 2**0.5)
+    assert len(pick_by_reference_and_text(ref, text, ids, vecs, 2)) == 2
+    assert pick_by_reference_and_text(ref, text, [], np.zeros((0, 3)), 2) == []
+
+
+def test_pick_by_reference_and_text_takes_a_single_candidate():
+    from app.services.arrange import pick_by_reference_and_text
+
+    picked = pick_by_reference_and_text(
+        np.array([[1.0, 0.0]]), np.array([0.0, 1.0]), ["only"], np.array([[1.0, 0.0]]), 5
+    )
+    assert [i for i, _ in picked] == ["only"]
+
+
 def test_one_per_page_when_asked():
     ids, vecs, _ = _cluster_vectors(1, 5)
     groups = group_for_pages(ids, vecs, [None] * 5, min_size=1, max_size=1)

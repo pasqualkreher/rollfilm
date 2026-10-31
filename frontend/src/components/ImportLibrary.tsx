@@ -124,11 +124,6 @@ export function ImportLibrary() {
 
   return (
     <section className="settings-section">
-      <p className="import-panel-desc">
-        Merge another Rollfilm library into this one. Ratings, labels, edits, tags and albums come
-        along. The other library is only read.
-      </p>
-
       {running && (
         <div className="merge-summary">
           <p className="import-panel-desc">

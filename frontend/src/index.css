@@ -38,22 +38,17 @@
   --stage-lightest: #f0f0f0; /* 6% - "Paper": off-white, not screen white */
   --stage-light: #bfbfbf; /* 25% - "Gray", the default surround */
   --stage-dark: #000000;
-  /* Corner style (Settings → Appearance): every radius in this file is a
-     multiple of --corner-scale, so data-corners="square" (state/corners.ts)
-     squares the whole UI by zeroing the scale. True circles (border-radius:
-     50% — spinners, dots, the colour wheel) deliberately stay round. */
-  --corner-scale: 1;
   /* UI typeface (Settings → Appearance): state/fonts.ts sets this inline on
      <html> with the chosen stack; the value here is Rollfilm, its default
      (the OS's own UI face), for the instant before that runs. */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  /* Radii: five steps, all riding --corner-scale so Settings > Corners >
-     Square flattens every one of them. */
-  --radius-xs: calc(4px * var(--corner-scale));
-  --radius-sm: calc(6px * var(--corner-scale));
-  --radius: calc(8px * var(--corner-scale));
-  --radius-lg: calc(10px * var(--corner-scale));
-  --radius-pill: calc(999px * var(--corner-scale));
+  /* Radii: five steps. */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 5px;
+  /* No real pills in this chrome: the former pill shapes are rectangles too. */
+  --radius-pill: 3px;
   /* Shadows: a hairline for raised controls, one for menus and popovers,
      one for dialogs; --shadow-pop stays for the few floats over photos. */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -64,11 +59,11 @@
   --text-xs: 11px;
   --text-sm: 12px;
   --text-base: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
+  --text-md: 13px;
+  --text-lg: 14px;
   /* The small-caps section label used across the editor, the info rail and
      the settings pages (see .label-micro). */
-  --label-micro-size: 10.5px;
+  --label-micro-size: 10px;
   --label-micro-tracking: 0.08em;
   --space-1: 4px;
   --space-2: 8px;
@@ -79,14 +74,17 @@
   /* One height for every small control that shares a bar: .btn-sm, and the
      chips and segmented tools that sit beside them. */
   --control-h-sm: 24px;
+  /* The side panels: one width and one inset, so the stage has one source. */
+  --panel-w: 320px;
+  --panel-pad: 12px;
   /* The toolbar system: every bar in the app (the filter bars, the stage bars
      under a photo, the canvas toolbar, the bottom action bars) takes its
      height, insets, spacing, divider and type from these, so they all read
      as the same chrome as the top bar. */
   --bar-h: 40px;
-  /* 16px: the bars' controls line up with the grid's left edge
+  /* The bars' controls line up with the grid's left edge
      (.page-scroll padding). */
-  --bar-pad-x: 16px;
+  --bar-pad-x: 12px;
   --bar-gap: 8px;
   --bar-sep: var(--border);
   --bar-label-size: var(--label-micro-size);
@@ -123,13 +121,6 @@
     color-scheme: dark;
   }
 }
-
-/* Square corner style (Settings → Appearance): zeroing the scale collapses
-   every calc(<px> * var(--corner-scale)) radius in this file to 0. */
-:root[data-corners="square"] {
-  --corner-scale: 0;
-}
-
 
 /* ---- Skins ---------------------------------------------------------------
    Eight pairs, each a light and a dark cut of the same idea. The first three
@@ -822,7 +813,7 @@ summary.whats-new-version-title {
 
 .task-pill-more {
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: var(--hover);
   font-size: 10px;
   line-height: 16px;
@@ -1501,7 +1492,7 @@ summary.whats-new-version-title {
      detail view before the photo is fitted) grows past the app shell and gets
      clipped by its overflow:hidden - the flex chain must be allowed to shrink. */
   min-height: 0;
-  padding: 16px;
+  padding: 12px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -1664,7 +1655,7 @@ summary.whats-new-version-title {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 16px 16px;
+  padding: 12px 12px 16px;
 }
 
 /* Timeline pages reserve a right gutter so the grid clears the fixed scrubber,
@@ -1776,15 +1767,21 @@ summary.whats-new-version-title {
   z-index: 1;
 }
 
-/* With no vertical padding the selection row would sit on the bar's top
-   edge. It gets the inset a control has in the 40px floor, and the standing
-   controls under it keep a line exactly as tall as the floor they centre in
-   when they are alone - so ticking the first photo grows the bar upward and
-   moves nothing below by a pixel. Wide windows only: the narrow bar below
-   scrolls with its own padding and wraps the groups onto several rows. */
+/* Two rows stacked with nothing between them: the selection row one bar tall
+   (its hairline included), the standing controls under it exactly as tall as
+   the line they centre in when they are alone - so ticking the first photo
+   adds one row on top and the row below keeps its height and every pixel.
+   Wide windows only: the narrow bar below scrolls with its own padding and
+   wraps the groups onto several rows. */
 @media (min-width: 701px) {
   .action-bar--bottom:has(> .action-bar-selection) {
-    padding-top: calc((var(--bar-h) - 1px - var(--control-h-sm)) / 2);
+    padding-block: 0;
+    row-gap: 0;
+  }
+
+  .action-bar-selection {
+    min-height: var(--bar-h);
+    padding-bottom: 0;
   }
 
   .action-bar--bottom:has(> .action-bar-selection) > .control-group:not(.action-bar-selection) {
@@ -2098,13 +2095,13 @@ input[type="search"],
 input[type="email"],
 input[type="url"],
 textarea {
-  padding: 7px 10px;
+  padding: 5px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -4116,7 +4113,7 @@ textarea:focus-visible {
      frame. The refit that follows every frame of it is cheap: it runs inside
      the stage's ResizeObserver from the size the observer hands over, so it
      neither forces a layout nor lags a frame behind (see fitCanvasToStage). */
-  margin-right: -320px;
+  margin-right: calc(-1 * var(--panel-w));
   opacity: 0;
   visibility: hidden;
   transition:
@@ -5101,7 +5098,7 @@ input.editor-preset-select {
 /* The develop panel sits on the elevated chrome tone, distinct from the stage,
    so it reads as a tool panel (Lightroom's right rail) rather than more page. */
 .editor-panel {
-  width: 320px;
+  width: var(--panel-w);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -5434,44 +5431,6 @@ input.editor-preset-select {
 .editor-autosave-note.failed {
   color: var(--danger);
 }
-
-/* Narrow windows: the fixed 320px side panel would squeeze the photo into a
-   sliver - stack the panel (with its own scroll area) below the stage instead.
-   700px is under the app window's 720px minimum (main.js): in the app the
-   panel always stays beside the stage, only a browser tab stacks. */
-@media (max-width: 700px) {
-  .editor-body {
-    flex-direction: column;
-  }
-
-  .editor-body {
-    gap: 10px;
-    padding: 10px;
-  }
-
-  /* Stacked, the panel is a block under the photo rather than a side rail, so
-     the frame goes back on the body and the two children give theirs up. */
-  .editor-stage {
-    padding: 0;
-  }
-
-  /* No arrows beside a stacked stage - the side gutters would only waste
-     the little width there is. */
-  .editor-stage-main {
-    padding: 16px;
-  }
-
-  /* The control row needs nothing of its own here: it has no gutters to drop
-     (.stage-bar), and its narrow-stage steps fire on the stage's width. */
-
-  .editor-panel {
-    width: 100%;
-    max-height: 46vh;
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
-}
-
 
 .lightbox-overlay {
   position: fixed;
@@ -6386,12 +6345,12 @@ input.dropdown-search {
    right in both themes; there is nothing left to override. */
 
 .btn {
-  padding: 5px 11px;
+  padding: 4px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-weight: 500;
   transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
@@ -7751,7 +7710,7 @@ input.dropdown-search {
 }
 
 .detail-panel.detail-panel--collapsed {
-  margin-right: -320px;
+  margin-right: calc(-1 * var(--panel-w));
   opacity: 0;
   visibility: hidden;
   transition:
@@ -7797,8 +7756,8 @@ input.dropdown-search {
    top bar to the bottom of the window, the same inner padding - so the switch
    between looking and developing swaps what is in the panel, not the panel. */
 .detail-panel {
-  flex: 0 0 320px;
-  width: 320px;
+  flex: 0 0 var(--panel-w);
+  width: var(--panel-w);
   min-width: 0;
   /* Cap to the layout height so long metadata/similar lists scroll *inside* the
      panel rather than growing the row and scrolling the whole page. */
@@ -7860,67 +7819,6 @@ input.dropdown-search {
    has min-width: 0, so the photo column shrinks rather than clips (the
    stage toolbar tightens with its container query). Only a browser tab
    gets the stacked, scrollable layout. */
-@media (max-width: 700px) {
-  /* Stacked layout: let the page scroll as a whole again so the image and panel
-     don't get clipped when they can't sit side by side. */
-  .detail-page {
-    overflow-y: auto;
-    /* Stacked, the panel is a block under the photo rather than a side rail,
-       so the frame goes back on the page (as in the stacked editor). */
-    padding: 10px;
-  }
-
-  .detail-main {
-    padding: 0;
-  }
-
-  /* Re-enable wrapping (desktop is nowrap) so the panel drops below the photo. */
-  .detail-layout {
-    flex-wrap: wrap;
-  }
-
-  /* Tighter band around the photo - 40px insets waste space on small screens.
-     The sides still keep a gutter for the prev/next arrows (shrunk below), so
-     the photo never runs underneath them. */
-  .detail-image {
-    padding: 16px 52px;
-  }
-
-  .lightbox-nav-btn {
-    width: 40px;
-    height: 40px;
-  }
-
-  .lightbox-nav-prev {
-    left: 8px;
-  }
-
-  .lightbox-nav-next {
-    right: 8px;
-  }
-
-  /* The control row needs nothing of its own here: no gutters to drop
-     (.stage-bar), and its narrow-stage steps fire on the stage's width. */
-
-  .detail-image {
-    flex-basis: 100%;
-    max-height: 40vh;
-  }
-
-  .detail-image img {
-    max-height: 40vh;
-  }
-
-  .detail-panel {
-    flex: 1 1 100%;
-    width: auto;
-    max-height: 50vh;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    padding: 14px 10px 14px;
-  }
-}
-
 /* Keep each section in a comfortable reading column so nothing stretches
    edge to edge on wide windows - the section itself, so its top rule ends
    with the text it belongs to (the Import page does the same at 820px). */
@@ -9392,7 +9290,7 @@ kbd {
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  border-radius: 9px;
+  border-radius: var(--radius-xs);
   background: var(--hover);
   color: var(--text-muted);
   font-size: var(--label-micro-size);
@@ -9663,7 +9561,7 @@ kbd {
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  border-radius: 9px;
+  border-radius: var(--radius-xs);
   background: var(--hover);
   color: var(--text-muted);
   font-size: var(--label-micro-size);
@@ -9891,7 +9789,7 @@ kbd {
 
 /* ---- Settings: appearance picker ----------------------------------------- */
 
-/* Light / Dark / Auto, above the two skin grids. Same shape as the Corners row
+/* Light / Dark / Auto, above the two skin grids. Same shape as the choice rows
    on the Settings page so the modal doesn't invent its own layout. */
 .theme-mode-row {
   display: flex;
@@ -10401,9 +10299,9 @@ kbd {
   margin-top: 2px;
 }
 
-/* Corner-style row in Appearance: title + description on the left, the
-   Rounded/Square segmented switch on the right. */
-.settings-corners {
+/* A choice row: title + description on the left, a segmented switch on the
+   right. */
+.settings-choice-row {
   display: flex;
   gap: 16px;
   align-items: center;
@@ -11421,14 +11319,21 @@ button.stats-col:disabled {
 .lightbox-overlay--page {
   background: var(--bg);
   padding: 0;
+  /* A column with the layout as its one flexing child, as .editor-overlay and
+     .editor-body, so the stage's height comes from the same chain as the
+     editor's. */
+  flex-direction: column;
   /* The collapsed camera-settings panel slides out past the right edge (see
-     .detail-panel--collapsed); clip it here like .detail-page does. */
-  overflow: hidden;
+     .detail-panel--collapsed); clip it here like .detail-page does. Clip, not
+     hidden: a hidden box still scrolls from code and from focus, and that
+     slides the photo and the panel up under the top bar. */
+  overflow: clip;
 }
 
 .lightbox-detail-layout {
   flex: 1;
   min-width: 0;
+  min-height: 0;
 }
 
 /* The photo column as a size container: the control row under the photo is
@@ -11757,12 +11662,6 @@ button.stats-col:disabled {
   line-height: 1;
 }
 
-@media (max-width: 1600px) {
-  .canvas-toolbar .canvas-tool-label {
-    display: none;
-  }
-}
-
 /* Labelled segments (Pages / Free canvas): icon and word side by side. */
 .segmented--tools button {
   display: inline-flex;
@@ -12061,7 +11960,7 @@ button.stats-col:disabled {
   transform: translate(-50%, -50%);
   z-index: 2;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: var(--bg-elevated);
   color: var(--text);
   border: 1px solid var(--border);
@@ -13310,23 +13209,41 @@ button.stats-col:disabled {
   width: 64px;
 }
 
-/* Similarity floor: a fixed-width readout so "Any" and "85%" sit alike. */
-.auto-pick-similarity {
-  display: flex;
+/* The clear button sits inside the field, whose padding always leaves it room. */
+.auto-pick-phrase {
+  position: relative;
+  display: inline-flex;
+  width: 240px;
+}
+
+.auto-pick-phrase input[type="text"] {
+  width: 100%;
+  padding-right: 26px;
+}
+
+.auto-pick-phrase-clear {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  font-size: var(--text-sm);
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--text-muted);
 }
 
-.auto-pick-similarity input[type="range"] {
-  width: 180px;
+.auto-pick-phrase-clear:hover {
+  color: var(--text);
 }
 
-.auto-pick-similarity-value {
-  width: 3.5em;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
+/* Similarity range: a fixed width, so a wider readout moves nothing. */
+.auto-pick-similarity-range {
+  width: 240px;
 }
 
 .auto-pick-results {
@@ -13665,7 +13582,7 @@ button.stats-col:disabled {
   position: relative;
   inset: auto;
   z-index: 30;
-  flex: 0 0 344px;
+  flex: 0 0 calc(var(--panel-w) + 24px);
   min-width: 0;
   min-height: 0;
   height: auto;
@@ -13708,7 +13625,7 @@ button.stats-col:disabled {
 
 .editor-overlay--docked .editor-panel {
   border-left: none;
-  width: 344px;
+  width: calc(var(--panel-w) + 24px);
 }
 
 /* Flush against the window's right edge: undo the canvas page's 20px side
@@ -13932,17 +13849,17 @@ button.stats-col:disabled {
 
 .tag-chip.membership-chip--canvas {
   border-style: solid;
-  border-color: color-mix(in srgb, #d9822b 55%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: none;
 }
 
 .tag-chip.membership-chip--canvas:hover {
-  border-color: #d9822b;
-  background: color-mix(in srgb, #d9822b 12%, var(--bg-elevated));
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
 }
 
 .tag-chip.membership-chip--canvas .icon {
-  color: #d9822b;
+  color: var(--accent);
 }
 
 /* The info card's small marks follow the same code: album filled on the
@@ -13959,11 +13876,11 @@ button.stats-col:disabled {
 
 .info-card-chip--canvas {
   background: none;
-  border: 1px solid color-mix(in srgb, #d9822b 55%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
 .info-card-chip--canvas .icon {
-  color: #d9822b;
+  color: var(--accent);
 }
 
 .info-card-chip--album {
@@ -13986,8 +13903,8 @@ a.info-card-chip--album:hover {
 }
 
 a.info-card-chip--canvas:hover {
-  border-color: #d9822b;
-  background: color-mix(in srgb, #d9822b 12%, transparent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 /* --- The canvas view --------------------------------------------------- */
@@ -14193,8 +14110,7 @@ a.info-card-chip--canvas:hover {
    A 3px track with the accent filled from zero to the value (the fill stops
    come from React, utils/rangeFill.ts) and a small ringed thumb. */
 .editor-slider input[type="range"],
-.canvas-crop-zoom input[type="range"],
-.auto-pick-similarity input[type="range"] {
+.canvas-crop-zoom input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 18px;
@@ -14204,8 +14120,7 @@ a.info-card-chip--canvas:hover {
   --pm-fill-b: 0%;
 }
 .editor-slider input[type="range"]::-webkit-slider-runnable-track,
-.canvas-crop-zoom input[type="range"]::-webkit-slider-runnable-track,
-.auto-pick-similarity input[type="range"]::-webkit-slider-runnable-track {
+.canvas-crop-zoom input[type="range"]::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: var(--radius-xs);
   background: linear-gradient(
@@ -14218,7 +14133,6 @@ a.info-card-chip--canvas:hover {
 }
 .editor-slider input[type="range"]::-webkit-slider-thumb,
 .canvas-crop-zoom input[type="range"]::-webkit-slider-thumb,
-.auto-pick-similarity input[type="range"]::-webkit-slider-thumb,
 .dual-range input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 12px;
@@ -14237,7 +14151,6 @@ a.info-card-chip--canvas:hover {
 }
 .editor-slider input[type="range"]:active::-webkit-slider-thumb,
 .canvas-crop-zoom input[type="range"]:active::-webkit-slider-thumb,
-.auto-pick-similarity input[type="range"]:active::-webkit-slider-thumb,
 .dual-range input[type="range"]:active::-webkit-slider-thumb {
   background: var(--accent);
 }
@@ -14246,13 +14159,11 @@ a.info-card-chip--canvas:hover {
   cursor: default;
 }
 .editor-slider input[type="range"]:focus-visible,
-.canvas-crop-zoom input[type="range"]:focus-visible,
-.auto-pick-similarity input[type="range"]:focus-visible {
+.canvas-crop-zoom input[type="range"]:focus-visible {
   outline: none;
 }
 .editor-slider input[type="range"]:focus-visible::-webkit-slider-thumb,
-.canvas-crop-zoom input[type="range"]:focus-visible::-webkit-slider-thumb,
-.auto-pick-similarity input[type="range"]:focus-visible::-webkit-slider-thumb {
+.canvas-crop-zoom input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 /* Centre detent on a slider that swings both ways: a tick where zero sits
@@ -14750,17 +14661,6 @@ input:hover:not(:disabled),
   white-space: pre;
 }
 
-/* The "made with an older process" line at the top of Tone. */
-.editor-process-note {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 10px;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
 /* The export size: what it is measured by, then the size. */
 .export-size-row {
   display: flex;
@@ -14787,4 +14687,649 @@ input:hover:not(:disabled),
   flex-wrap: wrap;
   gap: 6px 8px;
   margin: 0;
+}
+
+/* ===========================================================================
+   Pro pass (2026-10-31): towards the Capture One register.
+
+   Controls without a function follow one rule everywhere:
+   - never applicable here (the library, photo or session lacks the thing):
+     not rendered at all;
+   - not possible right now (empty history, nothing edited, nothing selected):
+     rendered, disabled, in the one look below;
+   - transient (saving, stopping): disabled, same look.
+   Written as overrides on top of the rules above, like Native pass 2.
+   --------------------------------------------------------------------------- */
+:root {
+  --disabled-opacity: 0.38;
+}
+
+:root body button:disabled,
+:root body input[type="checkbox"]:disabled,
+:root body input[type="radio"]:disabled,
+:root body .ctx-menu-item[aria-disabled="true"],
+:root body .nav-links--locked,
+:root body .editor-toolbar-live.is-waiting > *,
+:root body .settings-option:has(> input:disabled) {
+  opacity: var(--disabled-opacity);
+}
+
+/* Inside a group that is already dimmed, once is enough. */
+:root body .editor-toolbar-live.is-waiting button:disabled,
+:root body .settings-option:has(> input:disabled) > input:disabled {
+  opacity: 1;
+}
+
+/* Disabled in the markup, but content rather than a control: a menu's group
+   heading, a chart column with no photos, the only reference photo. */
+:root body .dropdown-option:disabled:has(.dropdown-group-label),
+:root body .stats-col:disabled,
+:root body .auto-pick-ref:disabled {
+  opacity: 1;
+}
+
+/* ---- Geometry and density ------------------------------------------------
+   Flat chrome: hairlines instead of shadows, neutral on-states so the one
+   accent stays for what is primary. The radii and type are the tokens at the
+   top of the file. */
+.action-bar--bottom,
+.smart-card,
+.smart-card:hover,
+.stat-tile:hover {
+  box-shadow: none;
+}
+
+.setup-card,
+.info-card,
+.drop-overlay-card {
+  box-shadow: var(--shadow-menu);
+}
+
+/* The photo on a dark surround: a hairline says where it ends, no glow. */
+.detail-image img.framed,
+.editor-stage-dark .editor-canvas,
+.editor-stage-dark .editor-pane-canvas {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* Flat and small, but keeping the opaque surface: the stage's shade is chosen
+   apart from the skin, so a bare glyph would vanish on some pairings. */
+:root body .lightbox-nav-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+:root body .lightbox-nav-btn:active:not(:disabled) {
+  transform: translateY(-50%);
+}
+
+.segmented button.active,
+.toggle-chip.active {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  color: var(--text);
+  font-weight: 500;
+}
+
+:root body .btn.primary {
+  font-weight: 500;
+}
+
+.tag-chip {
+  padding: 2px 5px 2px 8px;
+  border-color: transparent;
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+}
+
+.count-pill {
+  border-color: transparent;
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+  font-weight: 500;
+}
+
+.filter-chip-count,
+.canvas-tool-badge {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+  color: var(--text);
+  font-weight: 500;
+  line-height: 13px;
+}
+
+.editor-switch {
+  width: 26px;
+  height: 14px;
+  border-radius: var(--radius-xs);
+}
+
+.editor-switch--sm {
+  width: 26px;
+  border-radius: var(--radius-xs);
+}
+
+.editor-switch::after {
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+}
+
+.editor-switch.on::after,
+.editor-switch--sm.on::after {
+  transform: translateX(12px);
+}
+
+/* ---- The tool panels ---- */
+.editor-panel-body {
+  gap: 2px;
+  padding: 0 var(--panel-pad) var(--panel-pad);
+}
+
+.editor-panel-body > :first-child {
+  margin-top: var(--panel-pad);
+}
+
+.detail-panel {
+  padding: var(--panel-pad);
+}
+
+.editor-histogram-pinned {
+  margin: 0 calc(-1 * var(--panel-pad)) 2px;
+  padding: 8px var(--panel-pad) 6px;
+}
+
+.editor-footer {
+  gap: 6px;
+  padding: 10px var(--panel-pad);
+}
+
+.editor-sliders {
+  gap: 6px;
+  margin: 8px 0 12px;
+}
+
+.editor-slider {
+  gap: 2px;
+}
+
+.editor-slider--group {
+  margin-top: 2px;
+  padding-top: 10px;
+}
+
+.editor-section-title {
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.editor-accordion {
+  gap: 2px;
+}
+
+.editor-accordion-header {
+  margin-top: 0;
+  padding: 8px 4px 7px 2px;
+}
+
+.editor-accordion-header.open {
+  box-shadow:
+    calc(-1 * var(--panel-pad)) 0 0 var(--bg-elevated),
+    var(--panel-pad) 0 0 var(--bg-elevated);
+}
+
+.editor-accordion-title {
+  gap: 6px;
+}
+
+/* A disclosure triangle in front of the title, drawn so that it turns about
+   its own box. */
+.editor-accordion-caret {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  font-size: 0;
+}
+
+.editor-accordion-caret::before {
+  content: "";
+  border-left: 5px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+}
+
+.editor-accordion-caret.open {
+  color: var(--text);
+}
+
+.film-sim-tile {
+  border-color: transparent;
+  background: transparent;
+}
+
+.film-sim-tile:hover {
+  border-color: transparent;
+  background: var(--hover);
+}
+
+.film-sim-tile.active {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: none;
+}
+
+.editor-preset-item {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.editor-preset-item:hover {
+  background: var(--hover);
+}
+
+.editor-preset-item.active {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: none;
+}
+
+/* Smaller slider thumb; the centre tick follows its width. */
+.editor-slider input[type="range"]::-webkit-slider-thumb,
+.canvas-crop-zoom input[type="range"]::-webkit-slider-thumb,
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  margin-top: -3.5px;
+  box-shadow: none;
+}
+
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  margin-top: 0;
+}
+
+.editor-slider input[type="range"] {
+  height: 16px;
+}
+
+.pm-range-wrap--bipolar::before {
+  left: calc(5px + (100% - 10px) * var(--pm-zero, 0.5));
+}
+
+/* ---- Grid tiles ----------------------------------------------------------
+   The photo is the tile: tight gaps (GAP in justifiedLayout.ts for the virtual
+   grids), one neutral file-type label, and the rating as a plain caption strip
+   that shows under the pointer and on a selected photo. Settings can keep it on
+   every tile (html[data-tile-ratings]). The strip overlays the photo rather than
+   adding a row, so nothing in the grid moves when it appears. */
+.thumbnail-grid {
+  gap: 6px;
+}
+
+.timeline-section {
+  margin-bottom: 20px;
+}
+
+.thumb-card {
+  border-radius: var(--radius-xs);
+}
+
+.thumb-card .badge,
+.thumb-card .badge.badge-raw,
+.thumb-card .badge.badge-pair,
+.badge-inline.badge-raw,
+.badge-inline.badge-pair {
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.thumb-card .badge.badge-missing,
+.badge-inline.badge-missing {
+  background: var(--danger);
+  color: #fff;
+}
+
+.thumb-card .overlay-info {
+  height: 18px;
+  padding: 0 6px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--text-xs);
+  opacity: 0;
+}
+
+.thumb-card:hover .overlay-info,
+.thumb-card.selected .overlay-info,
+:root[data-tile-ratings] .thumb-card .overlay-info {
+  opacity: 1;
+}
+
+.overlay-stars {
+  gap: 4px;
+  color: var(--text);
+  letter-spacing: 0;
+  text-shadow: none;
+}
+
+.overlay-flag,
+.overlay-flag--pick,
+.overlay-flag--reject {
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--text);
+}
+
+.overlay-color-dot {
+  width: 8px;
+  height: 8px;
+  border: none;
+}
+
+.thumb-info-btn {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  backdrop-filter: none;
+  color: var(--text);
+}
+
+.thumb-card:hover .thumb-info-btn:hover,
+.thumb-info-btn[aria-expanded="true"] {
+  background: var(--hover);
+}
+
+.rating-stars button.filled {
+  color: var(--text);
+}
+
+/* ---- Pages as panels -----------------------------------------------------
+   The chrome names where you are (the tab, the icon), so a page needs no
+   heading of its own: kept for assistive technology, off the screen. No reading
+   columns either: hairlines run the window's width, only running text keeps a
+   readable measure. The Help chapters stay a column, they are prose. */
+.page h2.section-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.import-overview,
+.settings-page section,
+.theme-picker,
+.stats-tiles,
+.stats-card--wide,
+.stats-cards,
+.stats-page-sub,
+.stats-section-label,
+.stats-filterbar {
+  max-width: none;
+}
+
+.settings-desc,
+.settings-option-desc {
+  max-width: 640px;
+}
+
+.settings-page section :is(input[type="text"], input[type="password"], input[type="url"], select, textarea) {
+  max-width: 480px;
+}
+
+.stats-head {
+  top: -12px;
+  margin: -12px -12px 0;
+  padding: 12px 12px 0;
+}
+
+.stats-filterbar {
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+
+/* Create a named thing: a toolbar at the page's head, not a form in its body. */
+.album-create-row {
+  position: sticky;
+  top: -12px;
+  z-index: var(--z-bar);
+  align-items: center;
+  flex: none;
+  min-height: var(--bar-h);
+  margin: -12px -12px 12px;
+  padding: 0 var(--bar-pad-x);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--bar-sep);
+}
+
+.album-create-row .name-field {
+  flex: 0 1 240px;
+}
+
+.album-create-row input[type="text"] {
+  height: var(--control-h-sm);
+  padding-block: 0;
+}
+
+.album-create-row .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--control-h-sm);
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+/* ---- Flat regions instead of cards ---- */
+.stat-tile {
+  padding: 2px 12px;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.stat-tile-icon {
+  background: none;
+  color: var(--text-muted);
+}
+
+.stat-tile-value {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.stats-card {
+  padding: 10px 0 12px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.canvas-list-card {
+  background: none;
+  border-radius: var(--radius-xs);
+}
+
+.source-row {
+  padding: 8px 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.source-disconnected-badge {
+  padding: 0;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--label-micro-size);
+  font-weight: 500;
+  letter-spacing: var(--label-micro-tracking);
+}
+
+.import-dropzone {
+  padding: 20px 12px;
+  border-style: solid;
+  border-radius: var(--radius-xs);
+}
+
+.search-scope-banner {
+  margin-bottom: 12px;
+  padding: 0 0 8px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  font-size: var(--text-sm);
+}
+
+/* An album's cover: the caption is a plain strip, not type on a dark fade. */
+.smart-card {
+  border-radius: var(--radius-xs);
+}
+
+.smart-card-caption {
+  padding: 3px 6px;
+  background: var(--bg-elevated);
+}
+
+.smart-card-name {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.smart-card-count {
+  color: var(--text-muted);
+}
+
+/* ---- Tabs and section heads: the panels' micro labels ---- */
+.settings-tabs {
+  margin-bottom: 12px;
+}
+
+.settings-tab,
+.help-tab {
+  padding: 8px 12px 7px;
+  font-size: var(--label-micro-size);
+  font-weight: 600;
+  letter-spacing: var(--label-micro-tracking);
+  text-transform: uppercase;
+}
+
+.settings-section-header,
+.smart-row-title {
+  color: var(--text-muted);
+  font-size: var(--label-micro-size);
+  font-weight: 600;
+  letter-spacing: var(--label-micro-tracking);
+  text-transform: uppercase;
+}
+
+/* The canvas toolbar is icons; each one's word is its tooltip and aria-label. */
+.canvas-tool-label {
+  display: none;
+}
+
+.canvas-tool {
+  position: relative;
+  justify-content: center;
+  min-width: var(--control-h-sm);
+}
+
+/* ---- Window size ---------------------------------------------------------
+   Words stay on one line. The tab rows scroll sideways like the Help chapters;
+   the filter and canvas bars keep their last-resort second line, because their
+   popovers hang inside the bar and clipping it would cut them off. Those bars
+   span the window, so a media query measures them correctly, and a size
+   container would trap their fixed-position children. */
+.btn,
+.btn-sm,
+.segmented button,
+.tag-filter-btn,
+.toggle-chip,
+.settings-tab,
+.nav-links a,
+.stage-back-btn,
+.icon-btn {
+  white-space: nowrap;
+}
+
+.settings-tabs {
+  flex-wrap: nowrap;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.settings-tab,
+.settings-tabs-trailing {
+  flex: none;
+}
+
+.canvas-toolbar > .control-group {
+  flex-wrap: nowrap;
+}
+
+.filter-bar--sticky .bar-title {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 900px) {
+  /* First step of the fold: the worded toggles keep their icon, the word stays
+     in the tooltip. */
+  .filter-bar--sticky .toggle-chip--iconlabel .toggle-chip-row {
+    gap: 0;
+    font-size: 0;
+  }
+
+  .filter-bar--sticky .toggle-chip--iconlabel::after {
+    display: none;
+  }
+
+  .filter-bar--sticky .bar-title-sub {
+    display: none;
+  }
+}
+
+/* A bar that changes height while the window is dragged must not trail it. */
+.page-scroll {
+  transition: none;
+}
+
+/* The one movement a resize brings: the traffic lights slide away on going full
+   screen, and the tabs move along with them instead of jumping. */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-titlebar="inset"]:not([data-focus]) .top-bar {
+    transition:
+      padding-left 0.18s var(--ease-out),
+      transform 0.28s var(--ease-out),
+      opacity 0.2s ease-out,
+      visibility 0s;
+  }
+}
+
+.editor-grid-overlay--fine {
+  filter: none;
 }

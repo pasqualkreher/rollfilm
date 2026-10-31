@@ -298,7 +298,7 @@ function ListSubmenu({
               role="menuitem"
               aria-disabled="true"
               className="ctx-menu-item"
-              style={{ color: "var(--text-muted)", cursor: "default", background: "none" }}
+              style={{ cursor: "default", background: "none" }}
               onMouseEnter={() => setCursor(null)}
             >
               {a.name}

@@ -414,7 +414,7 @@ export function Stats() {
     return (
       <div className="page stats-page">
         <h2 className="section-title">Statistics</h2>
-        <LoadingState label="Crunching your library…" />
+        <LoadingState />
       </div>
     );
   }
@@ -430,10 +430,7 @@ export function Stats() {
     return (
       <div className="page stats-page">
         <h2 className="section-title">Statistics</h2>
-        <div className="empty-state">
-          Nothing to count yet — import some photos and this page fills up with your cameras,
-          lenses and favorite focal lengths.
-        </div>
+        <div className="empty-state">No photos yet.</div>
       </div>
     );
   }
@@ -482,7 +479,7 @@ export function Stats() {
           scroll under them: what the page is filtered by is always visible. */}
       <div className="stats-head">
       <h2 className="section-title">Statistics</h2>
-      <p className="stats-page-sub">{subtitle}</p>
+      {total === 0 && <p className="stats-page-sub">{subtitle}</p>}
 
       <div className={`stats-filterbar${filtered ? "" : " is-idle"}`}>
         {filtered ? (
@@ -501,11 +498,7 @@ export function Stats() {
               </span>
             ))}
           </div>
-        ) : (
-          <span className="stats-filterbar-hint">
-            Click any bar or column to filter the whole page by it; combine as many as you like.
-          </span>
-        )}
+        ) : null}
         <div className="stats-filterbar-actions" aria-hidden={!filtered}>
           <button type="button" className="btn btn-sm ghost" onClick={clearAll} disabled={!filtered}>
             Clear

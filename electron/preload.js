@@ -108,6 +108,8 @@ contextBridge.exposeInMainWorld("photoManager", {
   setTheme: (theme) => ipcRenderer.invoke("pm:set-theme", theme),
   // Dock / taskbar progress: 0-1 while a job runs, -1 clears it.
   setProgress: (fraction) => ipcRenderer.invoke("pm:set-progress", fraction),
+  // What the File and Photo menu items can act on right now.
+  setMenuTargets: (targets) => ipcRenderer.invoke("pm:set-menu-targets", targets),
   // The Go and Photo menus (and File → Export…) in the menu bar: one
   // { action, value? } per click, see main.js appMenuItem. Separate from onMenu
   // because these carry a value (a star count, a colour, a flag). The return

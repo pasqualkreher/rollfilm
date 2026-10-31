@@ -35,6 +35,7 @@ import { useFullResUpgrade } from "../utils/useFullResUpgrade";
 import { useBaselineRender } from "../utils/useBaselineRender";
 import { useRegionRender, type RegionAsk } from "../utils/useRegionRender";
 import { CompareControls, type CompareMode } from "../components/CompareControls";
+import { useMenuTargets } from "../utils/menuTargets";
 import { BaselinePane, CompareOverlay } from "../components/CompareOverlay";
 import { ZoomReadout } from "../components/ZoomReadout";
 import { StageBackgroundToggle } from "../components/StageBackgroundToggle";
@@ -1041,6 +1042,36 @@ export function ImageDetail() {
     });
   }, [similar, image?.paired_image_id]);
 
+  // The items the handlers below and the editor's (flag, export) answer to.
+  useMenuTargets({
+    rate: !adjustOpen,
+    color: !adjustOpen,
+    flag: true,
+    edit: !adjustOpen,
+    export: true,
+    trash: !adjustOpen,
+  });
+
+  // The desktop menu bar's Photo menu, on the photo being looked at (the
+  // editor, while it is open over this view, takes them itself).
+  const menuRef = useRef<(msg: { action: string; value?: string | number }) => void>(() => {});
+  menuRef.current = (msg) => {
+    // Not on the row of the photo just left (imageStale): the keys wait the
+    // same way, and a rating meant for this photo must not land on that one.
+    if (!image || adjustOpen || imageStale) return;
+    if (msg.action === "photo:rate") void setRating(Number(msg.value));
+    else if (msg.action === "photo:color") void setColor(String(msg.value) as ColorLabel);
+    else if (msg.action === "photo:flag") void setFlag(String(msg.value ?? "") as Flag | "");
+    else if (msg.action === "photo:trash") void deletePhoto();
+    else if (msg.action === "photo:edit") openAdjust();
+    else if (msg.action === "photo:export") setExportOpen(true);
+  };
+  useEffect(() => {
+    const on = (e: Event) => menuRef.current((e as CustomEvent<{ action: string; value?: string | number }>).detail);
+    window.addEventListener("pm:app-menu", on);
+    return () => window.removeEventListener("pm:app-menu", on);
+  }, []);
+
   if (!image) return <LoadingState className="page" />;
 
   // The photo on the stage and its preview (see `shown`); before the first
@@ -1070,26 +1101,6 @@ export function ImageDetail() {
     await api.images.update(image!.id, { color_label });
     invalidateActiveAndPair();
   }
-
-  // The desktop menu bar's Photo menu, on the photo being looked at (the
-  // editor, while it is open over this view, takes them itself).
-  const menuRef = useRef<(msg: { action: string; value?: string | number }) => void>(() => {});
-  menuRef.current = (msg) => {
-    // Not on the row of the photo just left (imageStale): the keys wait the
-    // same way, and a rating meant for this photo must not land on that one.
-    if (!image || adjustOpen || imageStale) return;
-    if (msg.action === "photo:rate") void setRating(Number(msg.value));
-    else if (msg.action === "photo:color") void setColor(String(msg.value) as ColorLabel);
-    else if (msg.action === "photo:flag") void setFlag(String(msg.value ?? "") as Flag | "");
-    else if (msg.action === "photo:trash") void deletePhoto();
-    else if (msg.action === "photo:edit") openAdjust();
-    else if (msg.action === "photo:export") setExportOpen(true);
-  };
-  useEffect(() => {
-    const on = (e: Event) => menuRef.current((e as CustomEvent<{ action: string; value?: string | number }>).detail);
-    window.addEventListener("pm:app-menu", on);
-    return () => window.removeEventListener("pm:app-menu", on);
-  }, []);
 
   async function setFlag(flag: Flag | "") {
     await api.images.update(image!.id, { flag });

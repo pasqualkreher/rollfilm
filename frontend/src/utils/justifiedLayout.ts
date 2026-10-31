@@ -19,7 +19,7 @@ import { loadMarginFor } from "./preload";
 // Layout constants mirroring the CSS grid (.thumbnail-grid gap, header pill +
 // margin, section spacing). They only need to be internally consistent: the
 // virtual grid positions everything itself, so these ARE the layout.
-export const GAP = 12;
+export const GAP = 6;
 // The header pill is 28px tall, 31px once it carries the import review's
 // month/year buttons; HEADER_H is the box reserved for either.
 //
@@ -29,7 +29,7 @@ export const GAP = 12;
 // last photo than to its own and looked like a caption for the wrong one.
 export const HEADER_H = 32;
 export const HEADER_MB = 6;
-export const SECTION_MB = 28;
+export const SECTION_MB = 20;
 
 // How far a row may be stretched past the target height to justify it. A row is
 // filled until the NEXT tile would overflow, so a full row is at most one tile

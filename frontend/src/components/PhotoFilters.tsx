@@ -66,13 +66,23 @@ function useDockFits(
   return fits;
 }
 
+// Whether a facet has ever had something in it. The facets are cross-filtered,
+// so a narrow filter empties them for the moment: a library without EXIF never
+// gets the control, but one that has it does not lose it (and shift the bar)
+// each time the filters leave nothing over.
+function useEverFilled(list: readonly unknown[] | undefined, value?: unknown): boolean {
+  const seen = useRef(false);
+  if ((list && list.length > 0) || value) seen.current = true;
+  return seen.current;
+}
+
 // Dual-thumb slider over the focal lengths actually present in the library
 // (the facet's sorted, formatted mm values are its stops). Dragging both
 // thumbs to the outer ends means "any" and clears the filter.
 // A dual-thumb slider over a filter's stops (the facet values, ascending):
 // focal length, ISO, aperture, shutter speed. `unit` is the short prefix of
 // the compact (docked) form, `format` the readout of one stop.
-function RangeSlider({
+export function RangeSlider({
   options,
   min,
   max,
@@ -364,10 +374,19 @@ export function PhotoFilters({
   // line up under it.
   const pinned = useFilterPinned();
   const showDates = Boolean(onDateFrom && onDateTo);
-  const showCamera = Boolean(cameras && onCamera);
-  const showLens = Boolean(lenses && onLens);
+  const everCameras = useEverFilled(cameras, camera);
+  const everLenses = useEverFilled(lenses, lens);
+  const everMakes = useEverFilled(makes, cameraMake);
+  const showCamera = Boolean(cameras && onCamera && everCameras);
+  const showLens = Boolean(lenses && onLens && everLenses);
+  // Not offered with nothing to choose from; a value already set keeps its
+  // field, so it can always be seen and changed.
+  const showAlbum = Boolean(
+    albums && onAlbumId && (albums.length > 0 || (canvases?.length ?? 0) > 0 || albumId || canvasId)
+  );
+  const showTags = Boolean(allTags && onTags && (allTags.length > 0 || (selectedTags?.length ?? 0) > 0));
   const showFocal = Boolean(focalLengths && onFocalRange);
-  const showMake = Boolean(makes && onCameraMake);
+  const showMake = Boolean(makes && onCameraMake && everMakes);
   const showIso = Boolean(isos && onIsoRange && isos!.length > 0);
   const showAperture = Boolean(apertures && onApertureRange && apertures!.length > 0);
   const showShutter = Boolean(shutters && onShutterRange && shutters!.length > 0);
@@ -397,8 +416,8 @@ export function PhotoFilters({
   const rowKey = [
     Boolean(sort),
     showViewMode,
-    Boolean(albums && onAlbumId),
-    Boolean(allTags && onTags),
+    showAlbum,
+    showTags,
     showDates,
   ].join();
   const dockFits = useDockFits(barRef, pinned, rowKey);
@@ -541,7 +560,7 @@ export function PhotoFilters({
           </span>
         </div>
       )}
-      {albums && onAlbumId && (
+      {showAlbum && albums && onAlbumId && (
         <div className="filter-menu-row filter-menu-row--album">
           <span className="filter-menu-label">{canvases ? "Album / Canvas" : "Album"}</span>
           <Dropdown
@@ -637,7 +656,7 @@ export function PhotoFilters({
         <ColorLabelPicker value={colorLabel} onChange={onColorLabel} />
       </div>
 
-      {allTags && onTags && (
+      {showTags && allTags && onTags && (
         <div className="filter-menu-row filter-menu-row--tags">
           <span className="filter-menu-label">Tags</span>
           <TagFilter icon={<IconTag size={13} />} options={allTags} value={selectedTags ?? []} onChange={onTags} />

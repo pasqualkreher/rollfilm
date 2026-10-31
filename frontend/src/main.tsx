@@ -8,13 +8,10 @@ import App from "./App";
 import { LibrarySetup } from "./components/LibrarySetup";
 import "./index.css";
 import { initTheme } from "./state/theme";
-import { initCorners } from "./state/corners";
 import { initFont } from "./state/fonts";
 
-// Apply the saved light/dark preference, corner style and typeface before the
-// first paint.
+// Apply the saved light/dark preference and typeface before the first paint.
 initTheme();
-initCorners();
 initFont();
 
 // Electron on macOS: the window has no title bar of its own, the traffic

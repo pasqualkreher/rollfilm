@@ -3656,7 +3656,9 @@ def auto_pick_images(
     """Auto pick: the photos that go with the reference(s), nearest first.
     Without tags or a place the vector table answers directly; with them,
     the library's own filter picks the candidates and the nearest of those
-    are taken."""
+    are taken. A phrase re-ranks the candidates by reference and phrase
+    together; without tags or a place the candidates are then the neighbours
+    of each."""
     refs, ref_vectors, _missing = _vectors_for(db, current_user.id, payload.reference_ids)
     if not refs:
         raise HTTPException(status_code=404, detail="Embedding not ready yet")
@@ -3666,6 +3668,12 @@ def auto_pick_images(
         seen.add(im.id)
         if im.paired_image_id:
             seen.add(im.paired_image_id)
+    phrase = (payload.query or "").strip()
+    text_vector = embeddings.encode_text(phrase) if phrase else None
+    # Distances are L2 on unit vectors: cosine = 1 - d^2 / 2.
+    min_distance = None
+    if payload.max_similarity is not None:
+        min_distance = (2.0 * (1.0 - min(1.0, max(-1.0, payload.max_similarity)))) ** 0.5
     if payload.tags or payload.country:
         query = _filtered_images_query(
             db, current_user, "combined", None, None, None, None,
@@ -3675,19 +3683,49 @@ def auto_pick_images(
         candidate_ids = [i for i in candidate_ids if i not in seen]
         vectors = embeddings.get_embeddings(engine, candidate_ids)
         ids = [i for i in candidate_ids if i in vectors]
+        if not ids:
+            matches = []
+        elif text_vector is not None:
+            matches = arrange_service.pick_by_reference_and_text(
+                np.stack(ref_vectors), text_vector, ids, np.stack([vectors[i] for i in ids]), len(ids)
+            )
+        else:
+            # A ceiling removes the nearest ones, so all of them are needed.
+            depth = len(ids) if min_distance is not None else count + 50
+            matches = arrange_service.pick_by_reference(
+                np.stack(ref_vectors), ids, np.stack([vectors[i] for i in ids]), depth
+            )
+    elif text_vector is not None:
+        reference = arrange_service.reference_vector(np.stack(ref_vectors))
+        pool = min(4096, max(400, 4 * count) + len(seen) + 50)
+        # The ceiling is about the reference, so it can't shape the phrase's
+        # neighbours: those over it are dropped below.
+        neighbours = embeddings.query_similar(
+            engine, reference, k=pool, min_distance=min_distance
+        ) + embeddings.query_similar(engine, text_vector, k=pool)
+        candidate_ids = list(dict.fromkeys(i for i, _ in neighbours if i not in seen))
+        vectors = embeddings.get_embeddings(engine, candidate_ids)
+        ids = [i for i in candidate_ids if i in vectors]
         matches = (
-            arrange_service.pick_by_reference(
-                np.stack(ref_vectors), ids, np.stack([vectors[i] for i in ids]), count + 50
+            arrange_service.pick_by_reference_and_text(
+                np.stack(ref_vectors), text_vector, ids, np.stack([vectors[i] for i in ids]), len(ids)
             )
             if ids
             else []
         )
     else:
         reference = arrange_service.reference_vector(np.stack(ref_vectors))
-        matches = embeddings.query_similar(engine, reference, k=min(4096, count + len(seen) + 50))
+        matches = embeddings.query_similar(
+            engine, reference, k=min(4096, count + len(seen) + 50), min_distance=min_distance
+        )
     if payload.min_similarity is not None:
-        # Distances are L2 on unit vectors: cosine = 1 - d^2 / 2.
         floor = min(1.0, max(-1.0, payload.min_similarity))
         max_distance = (2.0 * (1.0 - floor)) ** 0.5
         matches = [(i, d) for i, d in matches if d <= max_distance]
+    if min_distance is not None:
+        matches = [(i, d) for i, d in matches if d >= min_distance]
+    # A phrase or a ceiling ranks every candidate, so the filters above can't
+    # empty the page; the margin covers hits that _viewable_matches drops.
+    if text_vector is not None or min_distance is not None:
+        matches = matches[: count + 50]
     return _viewable_matches(db, current_user, matches, seen)[:count]

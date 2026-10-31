@@ -190,7 +190,7 @@ const CHAPTERS: Chapter[] = [
         lead: (
           <>
             You pick two skins — one light, one dark — and a mode that decides which is showing.
-            Corners and the typeface are yours to choose too.
+            The typeface is yours to choose too.
           </>
         ),
         body: (
@@ -217,18 +217,12 @@ const CHAPTERS: Chapter[] = [
               </li>
             </ul>
             <p>Each tile previews its own colors.</p>
-            <h4>Corners and typeface</h4>
-            <ul>
-              <li>
-                <strong>Corners</strong> makes cards, buttons and thumbnails rounded or square.
-              </li>
-              <li>
-                <strong>Typeface</strong> sets the font the whole interface is in:{" "}
-                <em>Rollfilm</em> (your system's own interface face) or one of five close relatives
-                your system already has — Helvetica, Avenir, Arial, Verdana, Trebuchet. Nothing is
-                downloaded.
-              </li>
-            </ul>
+            <h4>Typeface</h4>
+            <p>
+              <strong>Typeface</strong> sets the font the whole interface is in: <em>Rollfilm</em>{" "}
+              (your system's own interface face) or one of five close relatives your system already
+              has — Helvetica, Avenir, Arial, Verdana, Trebuchet. Nothing is downloaded.
+            </p>
             <p>
               All of these belong to the computer, not the library, so they survive switching
               libraries.
@@ -864,7 +858,9 @@ const CHAPTERS: Chapter[] = [
               <li>
                 <strong>Find similar:</strong> starting from a photo, Rollfilm finds the ones in your
                 library that go with it by look - narrowed by tags or a place if you like ("the
-                holiday, and of that what looks like this"). It is in the selection bar
+                holiday, and of that what looks like this"), and pulled toward a phrase like
+                "bauhaus style" if you type one (English works best). The similarity range can
+                also leave out near-duplicates. It is in the selection bar
                 and the right-click menu (<em>Find similar…</em>) and
                 here under Similar photos. Tick what you want, then select it in the library, add
                 it to an album or canvas, or export it.
@@ -2697,7 +2693,6 @@ export function Help() {
           the reading column below is width-limited (.help-inner). */}
       <h2 className="section-title">Help</h2>
       <p className="help-sub">
-        Everything Rollfilm can do, in the order you'll meet it. Eight chapters — pick one.{" "}
         <button className="btn btn-sm ghost" onClick={showOnboardingAgain}>
           Show the introduction again
         </button>

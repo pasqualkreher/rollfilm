@@ -3,11 +3,10 @@
 // photo that already carries its edits - minus the snapshot, which only means
 // something while an edit is in progress.
 //
-// Always rendered, disabled when there is nothing to compare: the toolbar is
-// centred, so a group that came and went per photo would shift the zoom
-// readout and the slideshow button every time you paged between an edited and
-// an untouched photo. The JPG step stays for the same reason (greyed out for
-// a photo that has no camera JPEG) where the editor can afford to drop it.
+// The eye and the two modes are always rendered, disabled while there is nothing
+// to compare: that changes from photo to photo with the edits. The baseline
+// switch is only there for a raw with a camera JPEG, as in the editor: with one
+// possible baseline there is nothing to switch.
 
 import { IconEye, IconImage, IconSideBySide, IconSplit } from "./Icons";
 
@@ -36,32 +35,31 @@ export function CompareControls({ hasJpg, vsJpg, onVsJpg, mode, onMode, holding,
   const pair = mode === "pair";
   return (
     <span className="editor-compare-group">
-      <span className="segmented editor-baseline" role="group" aria-label="Compare with">
-        <button
-          className={vsJpg ? "" : "active"}
-          aria-pressed={!vsJpg}
-          aria-label="Compare with the original"
-          onClick={() => onVsJpg(false)}
-          title="Compare with the original photo"
-        >
-          <IconImage size={14} />
-        </button>
-        <button
-          className={`editor-baseline-jpg${vsJpg ? " active" : ""}`}
-          aria-pressed={vsJpg}
-          aria-label="Compare with the camera JPG"
-          disabled={!hasJpg}
-          onClick={() => onVsJpg(true)}
-          title={
-            hasJpg
-              ? "Compare with the JPG the camera saved beside this RAW"
-              : "Only for a RAW that was shot together with a camera JPG"
-          }
-        >
-          JPG
-        </button>
-      </span>
-      <span className="editor-toolbar-sep" aria-hidden />
+      {hasJpg && (
+        <>
+          <span className="segmented editor-baseline" role="group" aria-label="Compare with">
+            <button
+              className={vsJpg ? "" : "active"}
+              aria-pressed={!vsJpg}
+              aria-label="Compare with the original"
+              onClick={() => onVsJpg(false)}
+              title="Compare with the original photo"
+            >
+              <IconImage size={14} />
+            </button>
+            <button
+              className={`editor-baseline-jpg${vsJpg ? " active" : ""}`}
+              aria-pressed={vsJpg}
+              aria-label="Compare with the camera JPG"
+              onClick={() => onVsJpg(true)}
+              title="Compare with the JPG the camera saved beside this RAW"
+            >
+              JPG
+            </button>
+          </span>
+          <span className="editor-toolbar-sep" aria-hidden />
+        </>
+      )}
       <button
         className={`btn btn-sm editor-compare-btn${holding ? " active" : ""}`}
         onMouseDown={() => onHold(true)}

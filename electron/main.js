@@ -1473,6 +1473,30 @@ function appMenuItem(label, action, value, accelerator) {
   };
 }
 
+// The items that act on photos, and which of the renderer's targets each one
+// follows (pm:set-menu-targets). Grey until a view says it can take them, so a
+// menu never offers something the click would silently drop. A submenu's parent
+// carries the state for its whole list.
+const MENU_TARGET_ITEMS = {
+  "file-export": "export",
+  "photo-rating": "rate",
+  "photo-color": "color",
+  "photo-flag": "flag",
+  "photo-edit": "edit",
+  "photo-export": "export",
+  "photo-trash": "trash",
+};
+let menuTargets = {};
+
+function applyMenuTargets() {
+  const menu = Menu.getApplicationMenu();
+  if (!menu) return;
+  for (const [id, target] of Object.entries(MENU_TARGET_ITEMS)) {
+    const item = menu.getMenuItemById(id);
+    if (item) item.enabled = Boolean(menuTargets[target]);
+  }
+}
+
 function buildApplicationMenu() {
   if (process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
@@ -1504,7 +1528,7 @@ function buildApplicationMenu() {
           { label: "Import…", accelerator: "Shift+Command+I", click: command("import") },
           // The key lives here, where a Mac user looks for Export; the Photo
           // menu's entry sends the same action without registering it twice.
-          appMenuItem("Export…", "photo:export", undefined, "Shift+Command+E"),
+          { ...appMenuItem("Export…", "photo:export", undefined, "Shift+Command+E"), id: "file-export" },
           { type: "separator" },
           {
             // Cmd-W puts the window away and leaves the app running, as Photos
@@ -1563,6 +1587,7 @@ function buildApplicationMenu() {
         submenu: [
           {
             label: "Rating",
+            id: "photo-rating",
             submenu: [
               appMenuItem("No Rating (0)", "photo:rate", 0),
               appMenuItem("1 Star (1)", "photo:rate", 1),
@@ -1574,6 +1599,7 @@ function buildApplicationMenu() {
           },
           {
             label: "Color Label",
+            id: "photo-color",
             submenu: [
               appMenuItem("None", "photo:color", "none"),
               { type: "separator" },
@@ -1585,6 +1611,7 @@ function buildApplicationMenu() {
           },
           {
             label: "Flag",
+            id: "photo-flag",
             submenu: [
               appMenuItem("Pick (A)", "photo:flag", "pick"),
               appMenuItem("Reject (X)", "photo:flag", "reject"),
@@ -1592,10 +1619,10 @@ function buildApplicationMenu() {
             ],
           },
           { type: "separator" },
-          appMenuItem("Edit (E)", "photo:edit"),
-          appMenuItem("Export…", "photo:export"),
+          { ...appMenuItem("Edit (E)", "photo:edit"), id: "photo-edit" },
+          { ...appMenuItem("Export…", "photo:export"), id: "photo-export" },
           { type: "separator" },
-          appMenuItem("Move to Trash (⌫)", "photo:trash"),
+          { ...appMenuItem("Move to Trash (⌫)", "photo:trash"), id: "photo-trash" },
         ],
       },
       { role: "windowMenu" },
@@ -2045,6 +2072,11 @@ ipcMain.handle("pm:set-theme", (_event, theme) => {
 });
 // The Dock icon's progress bar (taskbar on Windows): 0-1 while a bulk job
 // runs, anything else takes it away.
+ipcMain.handle("pm:set-menu-targets", (_event, targets) => {
+  menuTargets = targets && typeof targets === "object" ? targets : {};
+  applyMenuTargets();
+});
+
 ipcMain.handle("pm:set-progress", (_event, fraction) => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const ok = typeof fraction === "number" && Number.isFinite(fraction) && fraction >= 0;
@@ -2414,6 +2446,7 @@ app.whenReady().then(async () => {
   // Before any window: the splash and the native dialogs follow the skin.
   applySavedTheme();
   buildApplicationMenu();
+  applyMenuTargets();
   createSplash();
 
   const isFirstStart = !readConfig().libraryRoot;

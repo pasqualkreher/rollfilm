@@ -433,10 +433,7 @@ export function MapView() {
 
   return (
     <div className="page map-page">
-      <h2 className="section-title">
-        Map
-        <span className="count-pill">{points.length} located</span>
-      </h2>
+      <h2 className="section-title">Map</h2>
       <div className="map-wrap">
         <div ref={containerRef} className="map-container" />
         {!isLoading && points.length === 0 && (

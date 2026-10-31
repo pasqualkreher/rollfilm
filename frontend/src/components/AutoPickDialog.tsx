@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, editVersion } from "../api/client";
-import type { ImageOut, SearchResultOut } from "../api/types";
+import type { Facet, ImageOut, SearchResultOut } from "../api/types";
 import { useEscapeToClose } from "../utils/modalKeys";
 import { useTransientValue } from "../utils/transientMessage";
-import { rangeFillStyle } from "../utils/rangeFill";
 import { Dropdown } from "./Dropdown";
+import { RangeSlider } from "./PhotoFilters";
 import { TagFilter } from "./TagFilter";
-import { IconCheck, IconPin, IconSparkle, IconTag } from "./Icons";
+import { IconCheck, IconPin, IconSparkle, IconTag, IconX } from "./Icons";
 
 // A reference can come from the library index (thumb_version) or a full
 // photo (edit_rev): either way the thumbnail URL needs its cache key.
@@ -30,10 +30,14 @@ function thumbKey(image: PickReference): string {
 const COUNTS = [5, 10, 20, 50] as const;
 // Free count: the backend takes up to 200.
 const MAX_COUNT = 200;
-// Similarity floor in percent cosine: unrelated photos sit near 40%, near
-// duplicates near 100%, so the slider's bottom (30) means no floor.
+// Similarity range in percent cosine: unrelated photos sit near 40%, near
+// duplicates near 100%, so the slider's ends (30, 100) mean no limit.
 const SIM_ANY = 30;
-const SIM_MAX = 95;
+const SIM_TOP = 100;
+const SIM_STOPS: Facet[] = Array.from({ length: (SIM_TOP - SIM_ANY) / 5 + 1 }, (_, i) => ({
+  value: String(SIM_ANY + i * 5),
+  count: 0,
+}));
 const ANYWHERE = "";
 const NO_LOCATION = "__none__";
 // "All": every reference at once (their centre is the reference).
@@ -73,10 +77,12 @@ export function AutoPickDialog({
   );
   const [count, setCount] = useState(10);
   const [countDraft, setCountDraft] = useState("10");
-  const [similarity, setSimilarity] = useState(SIM_ANY);
-  const [similarityDraft, setSimilarityDraft] = useState(SIM_ANY);
+  const [similarity, setSimilarity] = useState({ min: "", max: "" });
+  const [similarityDraft, setSimilarityDraft] = useState({ min: "", max: "" });
   const [tags, setTags] = useState<string[]>([]);
   const [country, setCountry] = useState<string>(ANYWHERE);
+  const [phrase, setPhrase] = useState("");
+  const [phraseDraft, setPhraseDraft] = useState("");
   const [unticked, setUnticked] = useState<Set<string>>(new Set());
   const exclude = useMemo(() => new Set(excludeIds), [excludeIds]);
   useEscapeToClose(!closing, onClose);
@@ -95,6 +101,11 @@ export function AutoPickDialog({
     const timer = window.setTimeout(() => setCount(Math.min(MAX_COUNT, n)), 250);
     return () => window.clearTimeout(timer);
   }, [countDraft]);
+  // A typed phrase asks the library once typing rests.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPhrase(phraseDraft.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [phraseDraft]);
   const applyCount = (n: number) => {
     setCount(n);
     setCountDraft(String(n));
@@ -118,8 +129,11 @@ export function AutoPickDialog({
   const effectiveReference = reference ?? core.data?.[0]?.image.id ?? null;
   const referenceIds = effectiveReference === ALL_REFS ? references.map((r) => r.id) : effectiveReference ? [effectiveReference] : [];
 
+  const simFloor = Number(similarity.min) > SIM_ANY ? Number(similarity.min) / 100 : null;
+  const simCeiling = similarity.max && Number(similarity.max) < SIM_TOP ? Number(similarity.max) / 100 : null;
+
   const picks = useQuery({
-    queryKey: ["auto-pick", referenceIds, count, similarity, tags, country, excludeIds],
+    queryKey: ["auto-pick", referenceIds, count, simFloor, simCeiling, tags, country, phrase, excludeIds],
     queryFn: () =>
       api.images.autoPick({
         reference_ids: referenceIds,
@@ -127,7 +141,9 @@ export function AutoPickDialog({
         exclude_ids: excludeIds,
         tags: tags.length ? tags : null,
         country: country === ANYWHERE ? null : country,
-        min_similarity: similarity > SIM_ANY ? similarity / 100 : null,
+        min_similarity: simFloor,
+        max_similarity: simCeiling,
+        query: phrase || null,
       }),
     enabled: referenceIds.length > 0,
     retry: false,
@@ -225,6 +241,37 @@ export function AutoPickDialog({
           </div>
 
           <div className="auto-pick-row">
+            <span className="auto-pick-label">Toward</span>
+            <span className="auto-pick-phrase">
+              <input
+                type="text"
+                value={phraseDraft}
+                placeholder="e.g. bauhaus style"
+                aria-label="Phrase the photos should lean toward"
+                title="Also like this phrase. English works best."
+                onChange={(event) => setPhraseDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") setPhrase(phraseDraft.trim());
+                }}
+              />
+              {phraseDraft && (
+                <button
+                  type="button"
+                  className="auto-pick-phrase-clear"
+                  aria-label="Clear phrase"
+                  title="Clear"
+                  onClick={() => {
+                    setPhraseDraft("");
+                    setPhrase("");
+                  }}
+                >
+                  <IconX size={12} />
+                </button>
+              )}
+            </span>
+          </div>
+
+          <div className="auto-pick-row">
             <span className="auto-pick-label">How many</span>
             <span className="segmented" role="group" aria-label="How many photos">
               {COUNTS.map((n) => (
@@ -253,19 +300,17 @@ export function AutoPickDialog({
 
           <div className="auto-pick-row">
             <span className="auto-pick-label">Similarity</span>
-            <label className="auto-pick-similarity" title="Leave out photos less alike than this. Fewer may come back.">
-              <input
-                type="range"
-                min={SIM_ANY}
-                max={SIM_MAX}
-                step={5}
-                value={similarityDraft}
-                aria-label="Minimum similarity"
-                style={rangeFillStyle(similarityDraft, SIM_ANY, SIM_MAX)}
-                onChange={(event) => setSimilarityDraft(Number(event.target.value))}
+            <div className="auto-pick-similarity-range" title="Only photos within this range of alike. Fewer may come back.">
+              <RangeSlider
+                options={SIM_STOPS}
+                min={similarityDraft.min}
+                max={similarityDraft.max}
+                onChange={(min, max) => setSimilarityDraft({ min, max })}
+                unit="%"
+                format={(value) => `${value}%`}
+                label="similarity"
               />
-              <span className="auto-pick-similarity-value">{similarityDraft > SIM_ANY ? `${similarityDraft}%` : "Any"}</span>
-            </label>
+            </div>
           </div>
 
           <div className="auto-pick-results">

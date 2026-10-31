@@ -406,7 +406,8 @@ export type FilmSim =
 // finishing passes as measured against the camera - grain fitted to
 // Fujifilm's Grain Effect, clarity with a broad band for midtone depth, and
 // a mist that blooms around light sources while the blacks stay deep.
-export type ProcessVersion = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8";
+export const PROCESS_VERSIONS = ["1", "2", "3", "4", "5", "6", "7", "8"] as const;
+export type ProcessVersion = (typeof PROCESS_VERSIONS)[number];
 export const CURRENT_PROCESS: ProcessVersion = "8";
 // The last process on which Calibration renders the old way.
 const LAST_BELL_CALIBRATION: ProcessVersion = "5";
@@ -548,13 +549,7 @@ export function normalizeAdjustments(raw: Partial<Adjustments> | null | undefine
   // carries a film simulation (which "3" and up render differently), else it
   // is the same picture on every version and continues on the current one.
   base.process =
-    raw.process === "1" ||
-    raw.process === "2" ||
-    raw.process === "3" ||
-    raw.process === "4" ||
-    raw.process === "5" ||
-    raw.process === "6" ||
-    raw.process === "7"
+    raw.process && PROCESS_VERSIONS.includes(raw.process)
       ? raw.process
       : usesLegacyLook(raw)
         ? "1"

@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { withoutMembershipNames } from "../utils/autoTags";
 import type { ColorLabel, Flag, ImageOut, SmartAlbumOut, ViewMode } from "../api/types";
 import { useSelectionKeys } from "../utils/selection";
+import { useLibraryKinds } from "../state/libraryKinds";
 import { rollSubtitle } from "../utils/rollSummary";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import { useTasks } from "../state/tasks";
@@ -33,6 +34,7 @@ export function SmartAlbumDetail() {
   const [dateTo, setDateTo] = useSessionState<string | null>(`smart-album:${id}:dateTo`, null);
 
   const queryClient = useQueryClient();
+  const libraryKinds = useLibraryKinds();
   const { pushUndo } = useTasks();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // The photo the last click landed on, by id: a shift-click selects the run
@@ -235,6 +237,7 @@ export function SmartAlbumDetail() {
         }
         viewMode={viewMode}
         onViewMode={setViewMode}
+        showViewMode={(libraryKinds.raw && libraryKinds.other) || viewMode !== "combined"}
         showMerge={false}
         ratingMin={ratingMin}
         onRatingMin={setRatingMin}

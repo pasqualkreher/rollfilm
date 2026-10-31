@@ -146,6 +146,30 @@ def pick_by_reference(
     return [(ids[int(i)], float(distances[int(i)])) for i in order]
 
 
+def _standardised(values: np.ndarray) -> np.ndarray:
+    return (values - values.mean()) / (float(values.std()) or 1.0)
+
+
+def pick_by_reference_and_text(
+    ref_vecs: np.ndarray, text_vec: np.ndarray, ids: list[str], vecs: np.ndarray, count: int
+) -> list[tuple[str, float]]:
+    """The ``count`` candidates that go best with both the reference and a
+    phrase, best first. Photo-to-photo cosines sit far above photo-to-text ones
+    (about 0.8 against 0.3), so each is standardised over the candidates before
+    they count equally. The distance reported stays the one to the reference,
+    so a similarity floor keeps meaning "how alike the reference"."""
+    if len(ids) == 0 or count <= 0:
+        return []
+    ref = reference_vector(ref_vecs)
+    text = text_vec.astype(np.float32)
+    text = text / (np.linalg.norm(text) or 1.0)
+    v = _unit(vecs.astype(np.float32))
+    score = _standardised(v @ ref) + _standardised(v @ text)
+    distances = np.linalg.norm(v - ref, axis=1)
+    order = np.argsort(-score, kind="stable")[:count]
+    return [(ids[int(i)], float(distances[int(i)])) for i in order]
+
+
 def pick_core(ids: list[str], vecs: np.ndarray, count: int) -> list[tuple[str, float]]:
     """The ``count`` photos closest to the set's centre, nearest first, each
     with its L2 distance to the centre (the same measure the similar-photos

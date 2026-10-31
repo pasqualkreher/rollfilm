@@ -314,12 +314,12 @@ export function Albums() {
             onChange={(e) => setName(e.target.value)}
           />
         </label>
-        <button className="btn primary" type="submit">
+        <button className="btn primary" type="submit" disabled={!name.trim()}>
           <IconPlus size={14} /> Create album
         </button>
       </form>
 
-      {albums && albums.length === 0 && <div className="empty-state">No albums yet. Create one above.</div>}
+      {albums && albums.length === 0 && <div className="empty-state">No albums yet.</div>}
 
       <div className="thumbnail-grid">
         {albums?.map((album) => {

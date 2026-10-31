@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { isModalOpen } from "./modalKeys";
+import { useMenuTargets } from "./menuTargets";
 
 // Grid selection works like the desktop: a plain click opens the photo,
 // Cmd/Ctrl-click (Ctrl on Windows and Linux) toggles it in the selection,
@@ -72,6 +73,17 @@ export function useSelectionKeys(opts: {
   onExport?: () => void;
 }) {
   const navigate = useNavigate();
+  // The menu bar's File and Photo items follow what this grid can do with the
+  // selection right now (onAppMenu below is what answers them).
+  const selecting = Boolean(opts.hasSelection);
+  useMenuTargets({
+    rate: selecting && Boolean(opts.onRate),
+    color: selecting && Boolean(opts.onColor),
+    flag: selecting && Boolean(opts.onFlag),
+    trash: selecting && Boolean(opts.onDelete),
+    export: selecting && Boolean(opts.onExport),
+    edit: opts.edit?.selected.size === 1,
+  });
   // The pages pass fresh closures every render; reading them through a ref
   // keeps the single window listener from being torn down each time.
   const latest = useRef(opts);

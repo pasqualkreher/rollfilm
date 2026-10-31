@@ -33,6 +33,7 @@ import { collapsePairs } from "../state/viewPrefs";
 import { SaveCopyDialog, type SaveCopyRequest } from "../components/SaveCopyDialog";
 import { useEditCopies } from "../utils/useEditCopies";
 import { modKeyLabel, useSelectionKeys } from "../utils/selection";
+import { useLibraryKinds } from "../state/libraryKinds";
 import { useBarHeight } from "../utils/useBarHeight";
 import { selectionSharedMeta } from "../utils/selectionMeta";
 import type { ContextActions } from "../components/PhotoContextMenu";
@@ -100,6 +101,7 @@ export function AlbumDetail() {
   // photos than the index pointed past read off the end and threw.
   const [lastClickedId, setLastClickedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const libraryKinds = useLibraryKinds();
   const dialogs = useAppDialogs();
   const navigate = useNavigate();
   // The album always collapses each RAW+JPEG pair to one card (see
@@ -918,6 +920,7 @@ export function AlbumDetail() {
         trailing={albumDelete}
         viewMode={viewMode}
         onViewMode={setViewMode}
+        showViewMode={(libraryKinds.raw && libraryKinds.other) || viewMode !== "combined"}
         showMerge={false}
         ratingMin={ratingMin}
         onRatingMin={setRatingMin}
