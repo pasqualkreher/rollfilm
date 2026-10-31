@@ -4,6 +4,26 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.2.4 — 2026-10-31
+
+### New
+- Find similar: a "Toward" field steers the pick with a phrase ("bauhaus style"); the photos are chosen by the reference photo and the phrase together, counted equally. English works best.
+- Find similar: the similarity slider is a range now - a ceiling leaves out near-duplicates, a floor the unrelated ones; the ceiling is applied inside the search itself, so a page cannot come back empty because its nearest hits were dropped afterwards.
+- Editor: a fine grid (square cells in screen pixels, for judging a horizon) among the grid overlays; it also appears by itself while the Straighten slider is being moved.
+- Settings > Appearance: "Show ratings on every tile" puts rating, flag and colour label on every grid tile instead of only under the pointer or on a selected photo.
+
+### Improved
+- The whole interface is denser and flatter, closer to a desktop photo tool: smaller corner radii, 13px text and 12px controls, side panels of one width, quiet grid tiles (6px gaps, no colour badges, no gradient strip), pages as flat regions instead of cards, page titles and explanatory prose moved into tooltips and Help.
+- Controls that never apply to this library are left out: the RAW+JPG merge toggle and the File type filter in a library without pairs or raws, Hide duplicates in an import session without duplicates, camera facets the library has no data for. The answer comes from the unfiltered library and is remembered, so nothing moves while filtering.
+- What is not possible right now is greyed out in one look, and the menu bar's File and Photo items are grey until the view on screen can act on them (a selection in the grid, the photo in the photo view).
+- The Corners setting (rounded / square) is gone; the new geometry has one corner style.
+- Photo view: the "compare with the camera JPG" switch is only there for a raw with a camera JPEG, as in the editor.
+- Canvas: a page at its fitted size follows the window when it is resized, scaled about the view centre so it does not jump back to the first page; the panning hint and the filmstrip note moved into tooltips.
+- Albums and canvases: creating one needs a name (no more "Canvas" default); the creation row is a toolbar at the page's head.
+- Editor: the base component of a mask hides its remove button instead of greying it; Reset curve is greyed when the channel is already straight; the "Made with process N / Update" note under the panel is gone - an edit keeps rendering on the process version it was made with.
+- Import review: the Library and External sources tabs carry their explanations as tooltips; the "Immich full sync is on" note is gone from the bar.
+- Stats and Albums pages: the explanatory texts are gone; the empty states say only what is missing.
+
 ## 0.2.3 — 2026-10-26
 
 ### New
