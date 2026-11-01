@@ -73,11 +73,13 @@ More on [rollfilm.org](https://rollfilm.org/#gallery).
 | <img src="docs/screenshots/edit-nr.jpg" alt="Noise reduction at 200 percent" width="420"><br>**Noise reduction**: ISO 12800 at 200%, original left, cleaned right | <img src="docs/screenshots/edit-wb.jpg" alt="White balance controls" width="420"><br>**White balance**: Kelvin, tint and the usual lights one click away |
 | <img src="docs/screenshots/edit-presets.jpg" alt="Preset list in the editor" width="420"><br>**Presets**: save a look once, apply it with one click | <img src="docs/screenshots/canvas.jpg" alt="Canvas editor with photos laid out on a page" width="420"><br>**Canvas**: lay photos out on a page, print or export it |
 | <img src="docs/screenshots/canvas-edit.jpg" alt="Canvas with the photo editor docked beside the page" width="420"><br>**Canvas edit**: edit a photo right on the page, the original stays untouched | <img src="docs/screenshots/albums-wide.jpg" alt="Albums page" width="420"><br>**Albums**: countries, years and months, plus your own |
-| <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics**: the gear you actually use | |
+| <img src="docs/screenshots/stats.jpg" alt="Library statistics" width="420"><br>**Statistics**: the gear you actually use | <img src="docs/screenshots/rolls.jpg" alt="A roll opened as an album" width="420"><br>**Rolls**: every import kept as one album per card |
+| <img src="docs/screenshots/find-similar.jpg" alt="Find similar dialog with a Toward phrase" width="420"><br>**Find similar**: start from one photo, steer with a phrase, set how alike | <img src="docs/screenshots/export.jpg" alt="Export dialog" width="420"><br>**Export**: JPEG, PNG or TIFF, sized, sharpened, watermarked, as a preset |
+| <img src="docs/screenshots/canvas-arrange.jpg" alt="Auto-arrange dialog over a canvas" width="420"><br>**Auto-arrange**: photos that go together share a page, each page set for its photos | |
 
 Three quiet skins, each in light and dark, with a switch that can follow the system:
 
-<img src="docs/screenshots/themes.jpg" alt="Appearance dialog with the Stone, Pebble and Paper skins" width="850">
+<img src="docs/screenshots/themes.jpg" alt="Appearance dialog with the eight skins, each in light and dark" width="850">
 
 ## Features
 
