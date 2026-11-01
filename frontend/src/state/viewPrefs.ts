@@ -25,10 +25,6 @@ const MERGE_KEY = "pm.mergePairs";
 // remove only the shown file or the whole pair. Off (default) keeps the old
 // behaviour: a pair is one shot, so both halves go together, no prompt.
 const ASK_DELETE_KEY = "pm.askDeletePartner";
-// Rating, flag and colour label on every tile instead of only under the pointer
-// or on a selected photo. A CSS switch on <html>, so flipping it doesn't have to
-// re-render a grid of thousands of tiles.
-const TILE_RATINGS_KEY = "pm.tileRatings";
 // Pinned filter panel: the Filter chip's menu stays open, docked as a second row
 // of the filter bar, instead of being a popover that closes on the next click.
 // Shared by every screen with a filter bar (Library, Album detail, Import
@@ -236,25 +232,6 @@ export function setThumbSize(key: ThumbSizeKey) {
 export function setMergePairs(on: boolean) {
   localStorage.setItem(MERGE_KEY, on ? "1" : "0");
   emit();
-}
-
-function readTileRatings(): boolean {
-  return localStorage.getItem(TILE_RATINGS_KEY) === "1";
-}
-
-function applyTileRatings() {
-  document.documentElement.toggleAttribute("data-tile-ratings", readTileRatings());
-}
-applyTileRatings();
-
-export function setTileRatings(on: boolean) {
-  localStorage.setItem(TILE_RATINGS_KEY, on ? "1" : "0");
-  applyTileRatings();
-  emit();
-}
-
-export function useTileRatings(): boolean {
-  return useSyncExternalStore(subscribe, readTileRatings, () => false);
 }
 
 export function setAskDeletePartner(on: boolean) {

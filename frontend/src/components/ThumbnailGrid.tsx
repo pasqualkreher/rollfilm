@@ -9,7 +9,6 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import type { ImageOut } from "../api/types";
 import { api, editVersion } from "../api/client";
-import { COLOR_HEX } from "./ColorLabelPicker";
 import { IconX, IconDuplicate } from "./Icons";
 import { usePhotoInfoCard } from "./PhotoInfoCard";
 import { usePhotoContextMenu } from "./PhotoContextMenu";
@@ -958,25 +957,6 @@ export function ThumbnailGrid({
             }}
             onChange={() => {}}
           />
-        )}
-        {(image.rating > 0 || image.color_label !== "none" || image.flag) && (
-          <div className="overlay-info">
-            <span className="overlay-stars">
-              {image.flag && (
-                <span className={`overlay-flag overlay-flag--${image.flag}`} title={image.flag === "pick" ? "Pick" : "Reject"}>
-                  {image.flag === "pick" ? "✓" : "✕"}
-                </span>
-              )}
-              {image.rating > 0 ? "★".repeat(image.rating) : ""}
-            </span>
-            {image.color_label !== "none" && (
-              <span
-                className="overlay-color-dot"
-                style={{ background: COLOR_HEX[image.color_label] }}
-                title={image.color_label}
-              />
-            )}
-          </div>
         )}
       </div>
     );

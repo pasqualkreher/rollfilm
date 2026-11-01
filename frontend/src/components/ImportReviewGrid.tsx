@@ -43,23 +43,24 @@ export function flaggedDuplicate(f: StagedFileOut): boolean {
 // has to know a card's full height before the card exists.
 //
 // Two arrangements: `stacked` is two rows (stars and import box, then the
-// swatches: 6px padding, two rows of --sym-sized symbols, 4px between them,
-// 6px padding), `inline` is everything on one line. A row of the grid goes
+// swatches: 3px padding, two rows of --sym-sized symbols, 4px between them,
+// 3px padding), `inline` is everything on one line (the symbols and 6px of
+// button insets - the library's rating strip is 18px). A row of the grid goes
 // inline when every card in it is at least `inlineMinWidth` wide, so the cards
 // of one row always read the same and share one height.
 function footerSizes(rowHeight: number) {
   const sym = Math.min(Math.max(9, rowHeight * 0.05 - 2), 16);
   const swatchGap = Math.max(1, rowHeight * 0.008);
   const swatch = Math.max(8, sym * 0.82);
-  // The word "Import" at its CSS font size.
-  const word = 3.3 * Math.max(9, sym * 0.8);
+  // The word "Import" at its CSS font size (--text-xs, 11px).
+  const word = 3.3 * 11;
   return {
-    stacked: Math.round(16 + 2 * sym),
-    inline: Math.round(14 + sym),
+    stacked: Math.round(2 * sym + 10),
+    inline: Math.round(sym + 6),
     // 5 stars, the import symbol and box (7 symbols), 8 swatches and their
-    // gaps, the word, and 60px of paddings, button insets and the two 12px
-    // gaps between the groups.
-    inlineMinWidth: 7 * sym + 8 * swatch + 7 * swatchGap + word + 60,
+    // gaps, the word, and 50px of paddings (6px a side), button insets and
+    // the two 10px gaps between the groups.
+    inlineMinWidth: 7 * sym + 8 * swatch + 7 * swatchGap + word + 50,
   };
 }
 
@@ -414,8 +415,8 @@ export function ImportReviewGrid({
     return (
       <div
         key={f.id}
-        // Going to be imported (ticked, not an exact duplicate): the card is
-        // framed in the accent, so what comes in reads at a glance. The rest
+        // Going to be imported (ticked, not an exact duplicate): a thin accent
+        // line over the card, so what comes in reads at a glance. The rest
         // stay plain - never dimmed, a photo is judged at full strength. Its
         // own stars, colour and Import box are in the footer below, as on
         // every card.

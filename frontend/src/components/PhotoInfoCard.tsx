@@ -60,11 +60,12 @@ function InfoCard({
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
 
   // The same query key the lightbox uses, so a card that has been opened makes
-  // opening that photo instant - and a photo opened before costs no request.
+  // opening that photo instant. Always refetched: the tile shows no rating, so
+  // this card is where it is read, and rating on the grid only patches ["images"].
   const { data: image } = useQuery({
     queryKey: ["image", anchor.id],
     queryFn: () => api.images.get(anchor.id),
-    staleTime: 60_000,
+    staleTime: 0,
   });
   const { albums, albumsOf, canvasesOf } = useMembershipTargets();
 
@@ -124,6 +125,11 @@ function InfoCard({
     >
       <div className="info-card-name">
         <span className="info-card-filename">{image?.original_filename ?? "…"}</span>
+        {image?.flag && (
+          <span className="info-card-stars" title={image.flag === "pick" ? "Pick" : "Reject"}>
+            {image.flag === "pick" ? "✓" : "✕"}
+          </span>
+        )}
         {image && image.rating > 0 && (
           <span className="info-card-stars">{"★".repeat(image.rating)}</span>
         )}

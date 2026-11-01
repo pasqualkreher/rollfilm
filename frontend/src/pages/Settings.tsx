@@ -17,8 +17,6 @@ import { FONTS, useFont } from "../state/fonts";
 import { useTasks } from "../state/tasks";
 import {
   useAskDeletePartner,
-  useTileRatings,
-  setTileRatings,
   setAskDeletePartner,
   EDITOR_WORK_RES,
   useEditorWorkRes,
@@ -311,7 +309,6 @@ export function Settings() {
   // Whether deleting a paired photo asks "only this file or the whole pair?".
   // Client-side view preference (see viewPrefs), not a server setting.
   const askDeletePartner = useAskDeletePartner();
-  const tileRatings = useTileRatings();
   const editorWorkRes = useEditorWorkRes();
 
   // The open tab. sectionProps stays the single indirection every section call
@@ -960,13 +957,6 @@ export function Settings() {
 
       <Section {...sectionProps("Appearance")}>
         <AppearanceSetting />
-        <OptionRow
-          type="checkbox"
-          checked={tileRatings}
-          onChange={setTileRatings}
-          title="Show ratings on every tile"
-          desc="Stars, flag and color label stay visible in the grid. Otherwise they appear under the pointer and on selected photos."
-        />
       </Section>
 
       {desktop?.changeLibraryRoot && (
@@ -1634,8 +1624,8 @@ export function Settings() {
       <Section {...sectionProps("Backup & restore")}>
         <div className="settings-block">
           <Desc>
-            Downloads every imported photo plus ratings, labels, albums and edits. External sources
-            and tags are not included.
+            Downloads every imported photo plus ratings, labels, tags, albums, canvases and edits.
+            Files on external sources and the Immich API key are not included.
           </Desc>
           {desktop?.downloadBackup ? (
             <button className="btn primary" onClick={() => void downloadBackup()} disabled={backupRunning}>

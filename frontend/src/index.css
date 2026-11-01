@@ -3808,62 +3808,6 @@ textarea:focus-visible {
   }
 }
 
-.thumb-card .overlay-info {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 8px 10px;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
-  color: #fff;
-  font-size: var(--text-sm);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.overlay-stars {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #f2b134;
-  letter-spacing: 1px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-}
-
-/* The culling flag on a tile, in front of the stars: a green tick for a
-   pick, a red cross for a reject. */
-.overlay-flag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-shadow: none;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
-}
-
-.overlay-flag--pick {
-  background: #3ea76a;
-}
-
-.overlay-flag--reject {
-  background: var(--danger);
-}
-
-.overlay-color-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.85);
-  flex-shrink: 0;
-}
-
 .import-card {
   display: flex;
   flex-direction: column;
@@ -4043,8 +3987,9 @@ textarea:focus-visible {
 }
 
 /* The stars and swatches are there to be used, not to be looked at: quiet
-   under every card, full strength while the pointer is on the card - and on
-   a card that has a rating or a colour, which is information. */
+   under every card, a set rating or colour too, and full strength only while
+   the pointer is on the card (photo or footer, so they stay up on the way to a
+   click). */
 .import-card-footer .rating-stars,
 .import-card-footer .color-label-picker {
   opacity: 0.45;
@@ -4052,9 +3997,7 @@ textarea:focus-visible {
 }
 
 .import-card:hover .import-card-footer .rating-stars,
-.import-card:hover .import-card-footer .color-label-picker,
-.import-card-footer .rating-stars:has(.filled),
-.import-card-footer .color-label-picker:has(.color-swatch.selected:not(.color-swatch-none)) {
+.import-card:hover .import-card-footer .color-label-picker {
   opacity: 1;
 }
 
@@ -8515,63 +8458,6 @@ input.dropdown-search {
 
 .help-page .section-title {
   padding-top: 20px;
-}
-
-.help-sub {
-  color: var(--text-muted);
-  margin: 0 0 4px;
-}
-
-/* Chapter switcher. Same shape as the Settings tabs — one visual language for
-   "this page has more than fits on a screen". */
-.help-tabs {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  display: flex;
-  /* Eight chapters on one row. They only just fit at the page width, so the
-     row scrolls sideways - with the app's slim scrollbar visible, so a
-     narrow window shows there is more to reach - rather than wrapping to a
-     ragged second line. (No scrollbar-width here: setting the standard
-     property makes Chromium drop the ::-webkit-scrollbar styling.) */
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  /* Explicitly hidden: `overflow-x: auto` alone makes the vertical axis `auto`
-     too, and the tabs' 1px underline overhang (margin-bottom: -1px) counts as
-     overflow - which put a stubby vertical scrollbar at the end of the row. */
-  overflow-y: hidden;
-  gap: 0;
-  margin: 12px 0 16px;
-  padding: 4px 0 0;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-}
-
-.help-tab {
-  appearance: none;
-  border: none;
-  background: none;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--text-md);
-  padding: 8px 14px 10px;
-  white-space: nowrap;
-  flex: 0 0 auto;
-  cursor: pointer;
-  /* Always-present underline, transparent until active, so nothing shifts by a
-     pixel when a chapter is selected. */
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-}
-
-.help-tab:hover {
-  color: var(--text);
-}
-
-.help-tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-  font-weight: 600;
 }
 
 /* One line under the tabs saying what the chapter covers. */
@@ -14324,7 +14210,7 @@ body {
   button, [role="button"], [role="menuitem"], [role="menuitemcheckbox"], [role="option"],
   [role="tab"], [role="radio"], [role="switch"], label, summary, select, a,
   input[type="checkbox"], input[type="radio"], input[type="range"], input[type="color"], input[type="file"],
-  .thumb-card, .dir-entry, .theme-tile, .settings-tab, .help-tab, .mask-row, .film-sim-tile,
+  .thumb-card, .dir-entry, .theme-tile, .settings-tab, .mask-row, .film-sim-tile,
   .smart-card, .stat-tile, .canvas-shelf-card, .canvas-list-card, .color-swatch, .mixer-band,
   .canvas-swatch, .canvas-color, .canvas-font-option, .tag-chip, .page-card-tool,
   .editor-accordion-header, .settings-option, .copy-kind, .filter-pin, .brand,
@@ -14965,10 +14851,8 @@ input:hover:not(:disabled),
 
 /* ---- Grid tiles ----------------------------------------------------------
    The photo is the tile: tight gaps (GAP in justifiedLayout.ts for the virtual
-   grids), one neutral file-type label, and the rating as a plain caption strip
-   that shows under the pointer and on a selected photo. Settings can keep it on
-   every tile (html[data-tile-ratings]). The strip overlays the photo rather than
-   adding a row, so nothing in the grid moves when it appears. */
+   grids) and one neutral file-type label. Stars, flag and colour label are on
+   the info card behind the "i". */
 .thumbnail-grid {
   gap: 6px;
 }
@@ -14997,45 +14881,6 @@ input:hover:not(:disabled),
   color: #fff;
 }
 
-.thumb-card .overlay-info {
-  height: 18px;
-  padding: 0 6px;
-  background: var(--bg-elevated);
-  color: var(--text);
-  font-size: var(--text-xs);
-  opacity: 0;
-}
-
-.thumb-card:hover .overlay-info,
-.thumb-card.selected .overlay-info,
-:root[data-tile-ratings] .thumb-card .overlay-info {
-  opacity: 1;
-}
-
-.overlay-stars {
-  gap: 4px;
-  color: var(--text);
-  letter-spacing: 0;
-  text-shadow: none;
-}
-
-.overlay-flag,
-.overlay-flag--pick,
-.overlay-flag--reject {
-  width: auto;
-  height: auto;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-  color: var(--text);
-}
-
-.overlay-color-dot {
-  width: 8px;
-  height: 8px;
-  border: none;
-}
-
 .thumb-info-btn {
   width: 18px;
   height: 18px;
@@ -15053,6 +14898,76 @@ input:hover:not(:disabled),
 
 .rating-stars button.filled {
   color: var(--text);
+}
+
+/* ---- Import review cards like the library tile ---------------------------
+   The import grid is the library grid with a footer: the same tiles, no frame,
+   the same 2px corners, and the stars, colours and Import box below the photo
+   in a low strip drawn like the library's rating strip. Overrides only - the
+   base rules (.import-card, .import-card-footer) keep the layout. */
+.import-card {
+  position: relative;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  box-shadow: none;
+  transition: none;
+}
+
+/* The base rule is more specific than the plain .thumb-card one above, so the
+   photo's top corners are set here again. */
+.import-card .thumb-card {
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+}
+
+/* Going to be imported: a 1px accent line over the card instead of the frame.
+   Drawn on top, so it moves nothing; the selection ring may show with it. */
+.import-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--accent);
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.import-card--in::after {
+  opacity: 1;
+}
+
+/* The footer as the library's strip: elevated background, small paddings,
+   small type. Its heights are footerSizes in ImportReviewGrid.tsx - change
+   the paddings and gaps there too. */
+.import-card-footer {
+  background: var(--bg-elevated);
+  padding: 3px 6px;
+  gap: 4px;
+  font-size: var(--text-xs);
+}
+
+.import-card-footer--inline {
+  padding: 0 6px;
+  gap: 10px;
+}
+
+.import-card-footer .import-check-text {
+  font-size: var(--text-xs);
+}
+
+/* The lightbox's stage bar reuses the footer classes: no strip there, and its
+   own spacing and word size stay as they were. */
+.lightbox-review-footer {
+  background: none;
+  font-size: inherit;
+  padding: 0;
+  gap: 16px;
+}
+
+.lightbox-review-footer .import-check-text {
+  font-size: max(9px, calc(var(--sym) * 0.8));
 }
 
 /* ---- Pages as panels -----------------------------------------------------
@@ -15226,8 +15141,7 @@ input:hover:not(:disabled),
   margin-bottom: 12px;
 }
 
-.settings-tab,
-.help-tab {
+.settings-tab {
   padding: 8px 12px 7px;
   font-size: var(--label-micro-size);
   font-weight: 600;
@@ -15256,7 +15170,7 @@ input:hover:not(:disabled),
 }
 
 /* ---- Window size ---------------------------------------------------------
-   Words stay on one line. The tab rows scroll sideways like the Help chapters;
+   Words stay on one line. The tab rows (Settings, Help, Import) scroll sideways;
    the filter and canvas bars keep their last-resort second line, because their
    popovers hang inside the bar and clipping it would cut them off. Those bars
    span the window, so a media query measures them correctly, and a size
@@ -15277,7 +15191,18 @@ input:hover:not(:disabled),
   flex-wrap: nowrap;
   gap: 0;
   overflow-x: auto;
+  /* Explicitly hidden: `overflow-x: auto` alone makes the vertical axis `auto`
+     too, and the tabs' 1px underline overhang (margin-bottom: -1px) counts as
+     overflow - which put a stubby vertical scrollbar at the end of the row. */
   overflow-y: hidden;
+}
+
+/* The tab rows are flex items of the page's column. A scroll container's
+   automatic minimum size is 0, so once the page is taller than the window the
+   row is the one child that can give way, and it is squeezed to its padding
+   (the tabs vanish, a sliver of the trailing button is left). Keep its height. */
+.settings-tabs {
+  flex: none;
 }
 
 .settings-tab,

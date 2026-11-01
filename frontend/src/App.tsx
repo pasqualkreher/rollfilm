@@ -659,7 +659,7 @@ function MenuCommands() {
           go("/help");
           break;
         case "shortcuts":
-          setSessionState("help:chapter", "shortcuts");
+          setSessionState("help:chapter", "reference");
           go("/help");
           break;
         case "about":

@@ -1680,7 +1680,6 @@ export function ImportWizard() {
       <PhotoFilters
         title={
           <>
-            <span className="bar-title-sub">Import</span>
             <span className="bar-title-name">{sourceLabel}</span>
             <span className="count-pill">
               {selectedCount} of {importableCount} to import
