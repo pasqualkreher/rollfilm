@@ -31,6 +31,7 @@ from app.config import settings
 from app.db.models import ColorLabel, FileType, Image
 from app.services import develop, thumbnails
 from app.services import exif as exif_service
+from app.services import metadata_edit
 from app.services import raw as raw_service
 from app.services import sidecar as sidecar_service
 from app.services import tags as tags_service
@@ -193,6 +194,8 @@ def write_copy(
                 rating=src.rating or 0,
                 label=None if src.color_label in (None, ColorLabel.none) else src.color_label.value,
                 keywords=tuple(tags_service.user_tags(db, src)),
+                description=src.description,
+                edited=metadata_edit.edited_values(src),
             ),
             helper=helper,
         )

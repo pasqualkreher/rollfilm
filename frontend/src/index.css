@@ -15258,3 +15258,253 @@ input:hover:not(:disabled),
 .editor-grid-overlay--fine {
   filter: none;
 }
+
+/* Metadata dialog (components/MetadataDialog.tsx): title and buttons stay,
+   the sections scroll between them. Label column + field, one control tall. */
+.meta-modal {
+  width: min(560px, 100%);
+  max-height: 86vh;
+}
+
+.meta-head {
+  padding: 18px 22px 8px;
+}
+
+.meta-head h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.meta-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 22px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.meta-loading {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.meta-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.meta-section-label {
+  font-size: var(--label-micro-size);
+  font-weight: 600;
+  letter-spacing: var(--label-micro-tracking);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.meta-section-label--row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* The place as it stands: the photo's own words, so not in capitals. */
+.meta-place-now {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+}
+
+.meta-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.meta-row > label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.meta-modal input[type="text"],
+.meta-modal input[type="search"],
+.meta-modal input[type="datetime-local"],
+.meta-modal input[type="number"],
+.meta-modal select,
+.meta-modal textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.meta-modal textarea {
+  resize: vertical;
+  min-height: 44px;
+}
+
+.meta-modal input:disabled,
+.meta-modal select:disabled {
+  opacity: 0.7;
+}
+
+.meta-modal input.is-mixed::placeholder,
+.meta-modal textarea.is-mixed::placeholder {
+  font-style: italic;
+}
+
+.meta-seg {
+  align-self: flex-start;
+  margin-bottom: 2px;
+}
+
+.meta-shift {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.meta-shift select {
+  width: auto;
+}
+
+.meta-shift-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.meta-modal .meta-shift-unit input {
+  width: 58px;
+}
+
+.meta-place-search {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.meta-place-list.dropdown-menu {
+  position: absolute;
+  top: calc(var(--control-h-sm, 26px) + 4px);
+  left: 0;
+  right: 0;
+  max-width: none;
+  max-height: 220px;
+}
+
+.meta-place-row {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta-place-row.cursor {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.meta-map {
+  height: 190px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.meta-map.leaflet-container {
+  cursor: crosshair;
+}
+
+.meta-place-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.meta-hint {
+  margin: 0;
+  font-size: var(--text-xs, 11px);
+  color: var(--text-muted);
+}
+
+.meta-foot {
+  border-top: 1px solid var(--border);
+  padding: 10px 22px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meta-error {
+  margin: 0;
+}
+
+.meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta-actions-gap {
+  flex: 1;
+}
+
+/* A place the library already has photos of: its count (or "Same time")
+   beside the name, quieter. */
+.meta-place-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.meta-place-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta-place-note {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.meta-place-row.cursor .meta-place-note {
+  color: inherit;
+  opacity: 0.8;
+}

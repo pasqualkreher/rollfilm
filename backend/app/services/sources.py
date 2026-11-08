@@ -277,6 +277,9 @@ def _index_file(db, source_root: SourceRoot, path: Path, sha256: str | None = No
         focal_length=exif.get("focal_length"),
         gps_lat=exif.get("gps_lat"),
         gps_lon=exif.get("gps_lon"),
+        title=exif.get("title"),
+        creator=exif.get("creator"),
+        copyright=exif.get("copyright"),
     )
     db.add(image)
     db.flush()

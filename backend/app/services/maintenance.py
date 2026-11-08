@@ -48,6 +48,7 @@ from app.services.membership_tags import sync_membership_tags
 from app.services.raw import classify_file_type, raw_dimensions
 from app.services.settings_store import IMMICH_API_KEY, set_setting
 from app.services import lens_profile
+from app.services import metadata_edit
 from app.services.thumbnails import (
     adjustments_from_image,
     editor_recently_active,
@@ -888,6 +889,8 @@ def repair_capture_dates(db: Session, owner_id: int) -> dict:
         raise AlreadyRunning("The capture dates are already being repaired.")
     _repair_cancel.clear()
     images = db.query(Image).filter(Image.owner_id == owner_id).all()
+    # A date set by hand (metadata_edit) is the user's word, not a mistake.
+    images = [img for img in images if "taken_at" not in metadata_edit.edited_fields(img)]
     tasks = [(img, resolve_image_path(img)) for img in images]
     tasks = [(img, path) for img, path in tasks if path.exists()]
 

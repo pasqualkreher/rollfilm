@@ -31,7 +31,7 @@ from app.db.models import (
     SourceRoot,
 )
 from app.db.session import SessionLocal
-from app.services import geocode, machine
+from app.services import geocode, machine, metadata_edit
 from app.services.exif import (
     ExifData,
     capture_date_from_filename,
@@ -1661,7 +1661,8 @@ def _commit_import_session(
         if _is_duplicate(staged) and promoted is None:
             continue
 
-        exif_dict = json.loads(staged.exif_json) if staged.exif_json else {}
+        # The file's values, with what was edited in the review laid over them.
+        exif_dict = metadata_edit.overlay_exif(json.loads(staged.exif_json) if staged.exif_json else {}, staged)
         staged_full_path = staged_file_path(staged)
 
         # A managed photo sitting in the Trash whose original is still in the
@@ -1919,6 +1920,9 @@ def _commit_import_session(
                 focal_length=to_float(exif_dict.get("focal_length")),
                 gps_lat=to_float(exif_dict.get("gps_lat")),
                 gps_lon=to_float(exif_dict.get("gps_lon")),
+                title=exif_dict.get("title"),
+                creator=exif_dict.get("creator"),
+                copyright=exif_dict.get("copyright"),
                 rating=staged.rating,
                 color_label=staged.color_label,
                 immich_sync=staged.immich_sync,
@@ -1927,6 +1931,8 @@ def _commit_import_session(
         db.flush()
         if read_file_metadata:
             apply_file_metadata(db, owner_id, image, exif_dict)
+        # Last, so it outranks the file: the review's edit, marked as hand-made.
+        metadata_edit.apply_staged_edits(image, staged)
         new_images.append(image)
         # The session may well stay open (see below): the file stays in it,
         # now reading as "already in library" exactly like a duplicate found at

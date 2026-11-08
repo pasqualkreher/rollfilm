@@ -512,6 +512,18 @@ export function IconRename(props: IconProps) {
   );
 }
 
+// Data rows (a bullet and a line each) with a pencil over the corner: edit a
+// photo's metadata. Built like IconRename, so the two read as one family.
+export function IconEditMetadata(props: IconProps) {
+  return (
+    <svg {...svgProps(props)}>
+      <path d="M2.5 3.5h.01M5 3.5h6M2.5 6.75h.01M5 6.75h4M2.5 10h.01M5 10h1.5" />
+      <path d="M12.1 7.4a1.1 1.1 0 0 1 1.6 1.6l-5.2 5.2-2.2.5.5-2.2 5.3-5.1z" />
+      <path d="M11.3 8.2l1.6 1.6" />
+    </svg>
+  );
+}
+
 // A "T" - text placed on the page.
 export function IconTextT(props: IconProps) {
   return (

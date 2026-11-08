@@ -20,6 +20,10 @@ import type {
   ImageOut,
   ImageRenameResult,
   ImageUsage,
+  MetaField,
+  MetadataSuggestions,
+  MetadataSummary,
+  PlaceHit,
   ImmichActivity,
   ImmichPushResult,
   ImmichSettings,
@@ -466,6 +470,40 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ name, rename_pair }),
       });
+    },
+    // The metadata dialog: what the photos share, the edit (only the fields
+    // named change; null or "" clears one), and "Restore from file".
+    metadataSummary(image_ids: string[]): Promise<MetadataSummary> {
+      return request(`/images/metadata/summary`, { method: "POST", body: JSON.stringify({ image_ids }) });
+    },
+    editMetadata(
+      image_ids: string[],
+      fields: Partial<Record<MetaField, unknown>>,
+      shift_seconds?: number
+    ): Promise<ImageOut[]> {
+      return request(`/images/metadata`, {
+        method: "POST",
+        body: JSON.stringify({ image_ids, fields, shift_seconds: shift_seconds || null }),
+      });
+    },
+    revertMetadata(image_ids: string[]): Promise<{ images: ImageOut[]; unreadable: number }> {
+      return request(`/images/metadata/revert`, { method: "POST", body: JSON.stringify({ image_ids }) });
+    },
+    // Earlier values and places from the library; `start`/`end` add the places
+    // of photos taken around then, `exclude` leaves the edited photos out.
+    metadataSuggestions(start?: string, end?: string, exclude?: string[]): Promise<MetadataSuggestions> {
+      const q = new URLSearchParams();
+      if (start) q.set("start", start);
+      if (end) q.set("end", end);
+      if (exclude?.length) q.set("exclude", exclude.join(","));
+      return request(`/images/metadata/suggestions?${q.toString()}`);
+    },
+    // Towns and cities by name (offline), and what a point on the map is called.
+    places(q: string): Promise<PlaceHit[]> {
+      return request(`/images/places?q=${encodeURIComponent(q)}`);
+    },
+    placeLabel(lat: number, lon: number): Promise<{ label: string | null }> {
+      return request(`/images/place-label?lat=${lat}&lon=${lon}`);
     },
     bulkUpdate(
       image_ids: string[],
@@ -1377,6 +1415,30 @@ export const api = {
       return request(`/import/sessions/${sessionId}/files`, {
         method: "PATCH",
         body: JSON.stringify({ file_ids: fileIds, ...patch }),
+      });
+    },
+    // The metadata dialog on files in the review (see api.images.editMetadata).
+    stagedMetadataSummary(sessionId: string, fileIds: string[]): Promise<MetadataSummary> {
+      return request(`/import/sessions/${sessionId}/files/metadata/summary`, {
+        method: "POST",
+        body: JSON.stringify({ file_ids: fileIds }),
+      });
+    },
+    editStagedMetadata(
+      sessionId: string,
+      fileIds: string[],
+      fields: Partial<Record<MetaField, unknown>>,
+      shift_seconds?: number
+    ): Promise<StagedFileOut[]> {
+      return request(`/import/sessions/${sessionId}/files/metadata`, {
+        method: "POST",
+        body: JSON.stringify({ file_ids: fileIds, fields, shift_seconds: shift_seconds || null }),
+      });
+    },
+    revertStagedMetadata(sessionId: string, fileIds: string[]): Promise<StagedFileOut[]> {
+      return request(`/import/sessions/${sessionId}/files/metadata/revert`, {
+        method: "POST",
+        body: JSON.stringify({ file_ids: fileIds }),
       });
     },
     // keepSessionOpen leaves the session open even when nothing is left in

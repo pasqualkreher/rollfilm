@@ -29,6 +29,7 @@ from app.db.models import (
     User,
 )
 from app.db.session import get_db
+from app.services import metadata_edit
 from app.services.filesystem import resolve_image_path
 from app.services.import_pipeline import (
     ReviewRenderBusy,
@@ -88,7 +89,7 @@ def _trashed_duplicate_ids(
 def _to_staged_file_out(
     f: ImportStagedFile, paired_id: str | None = None, duplicate_in_trash: bool = False
 ) -> schemas.StagedFileOut:
-    exif = json.loads(f.exif_json) if f.exif_json else {}
+    exif = metadata_edit.overlay_exif(json.loads(f.exif_json) if f.exif_json else {}, f)
     return schemas.StagedFileOut(
         id=f.id,
         original_filename=f.original_filename,
@@ -112,6 +113,11 @@ def _to_staged_file_out(
         focal_length=exif.get("focal_length"),
         gps_lat=exif.get("gps_lat"),
         gps_lon=exif.get("gps_lon"),
+        title=exif.get("title"),
+        creator=exif.get("creator"),
+        copyright=exif.get("copyright"),
+        description=exif.get("caption"),
+        meta_edited=bool(f.meta_edits),
         immich_sync=f.immich_sync,
         imported=f.imported,
         processed=f.processed,
@@ -1034,6 +1040,79 @@ def bulk_update_staged_files(
         _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
         for f in session.staged_files
     ]
+
+
+def _staged_targets(session, file_ids: list[str]) -> tuple[list[ImportStagedFile], dict[str, ImportStagedFile], dict[str, str]]:
+    by_id = {f.id: f for f in session.staged_files}
+    files = [by_id[i] for i in file_ids if i in by_id]
+    if not files:
+        raise HTTPException(status_code=400, detail="No files given.")
+    return files, by_id, compute_staged_pairs(session.staged_files)
+
+
+def _session_files_out(db: Session, session) -> list[schemas.StagedFileOut]:
+    pairs = compute_staged_pairs(session.staged_files)
+    trashed = _trashed_duplicate_ids(db, session, session.staged_files)
+    return [
+        _to_staged_file_out(f, pairs.get(f.id), f.duplicate_of_image_id in trashed)
+        for f in session.staged_files
+    ]
+
+
+@router.post("/sessions/{session_id}/files/metadata/summary", response_model=schemas.MetadataSummaryOut)
+def staged_metadata_summary(
+    session_id: str,
+    payload: schemas.StagedMetadataIds,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """What the metadata dialog starts from for files in the review."""
+    session = get_owned_import_session(db, current_user.id, session_id)
+    files, _, _ = _staged_targets(session, payload.file_ids)
+    return metadata_edit.staged_summary(files)
+
+
+@router.post("/sessions/{session_id}/files/metadata", response_model=list[schemas.StagedFileOut])
+def edit_staged_metadata(
+    session_id: str,
+    payload: schemas.StagedMetadataEdit,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Edit date, place, title, author, caption or camera data of files in
+    the review (and their RAW+JPEG partners). Carried onto the photos at
+    import as hand edits; the files themselves are not changed."""
+    session = get_owned_import_session(db, current_user.id, session_id)
+    files, by_id, pairs = _staged_targets(session, payload.file_ids)
+    try:
+        metadata_edit.edit_staged(
+            files, payload.fields, payload.shift_seconds, lambda f: by_id.get(pairs.get(f.id, ""))
+        )
+    except metadata_edit.MetadataError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    db.commit()
+    db.refresh(session)
+    return _session_files_out(db, session)
+
+
+@router.post("/sessions/{session_id}/files/metadata/revert", response_model=list[schemas.StagedFileOut])
+def revert_staged_metadata(
+    session_id: str,
+    payload: schemas.StagedMetadataIds,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Forget the review's metadata edits of these files (and partners)."""
+    session = get_owned_import_session(db, current_user.id, session_id)
+    files, by_id, pairs = _staged_targets(session, payload.file_ids)
+    for f in files:
+        f.meta_edits = None
+        partner = by_id.get(pairs.get(f.id, ""))
+        if partner is not None:
+            partner.meta_edits = None
+    db.commit()
+    db.refresh(session)
+    return _session_files_out(db, session)
 
 
 @router.post("/sessions/{session_id}/commit", response_model=list[schemas.ImageOut])

@@ -26,7 +26,7 @@ import {
   fileTypeBadgeClass,
 } from "../components/ThumbnailGrid";
 import { adjustmentsAreNeutral, editsFromImage } from "../utils/adjustments";
-import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconSparkle, IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconChevronLeft, IconChevronRight, IconCloudUp, IconExport, IconEditMetadata, IconImage, IconPencil, IconPlay, IconRename, IconSaveCopy, IconSparkle, IconTrash, IconX } from "../components/Icons";
 import { AutoPickDialog } from "../components/AutoPickDialog";
 import { Slideshow } from "../components/Slideshow";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow, preloadImage } from "../utils/preload";
@@ -48,6 +48,7 @@ import { StageBackgroundToggle } from "../components/StageBackgroundToggle";
 import { rememberLastViewedImage } from "../utils/lastViewed";
 import { splitFilename } from "../utils/photoMeta";
 import { ExifTable } from "../components/ExifTable";
+import { useMetadataDialog } from "../components/useMetadataDialog";
 import { useTransientMessage } from "../utils/transientMessage";
 import { isModalOpen } from "../utils/modalKeys";
 import { COLOR_KEYS } from "../utils/selection";
@@ -199,6 +200,8 @@ export function ImageDetail() {
   // edits already saved on the photo. The dialog asks physical vs virtual;
   // the Settings toggle adds the physical copy's quality/size controls.
   const [saveCopyOpen, setSaveCopyOpen] = useState(false);
+  // Date, place, title, author and camera data, edited by hand.
+  const metadata = useMetadataDialog();
   // Renaming the file on disk: the title row swaps to an input while this is
   // on. The draft holds the STEM only - the extension isn't editable.
   const [renaming, setRenaming] = useState(false);
@@ -1839,7 +1842,17 @@ export function ImageDetail() {
           </div>
 
           <div className="detail-section">
-            <div className="detail-section-label">Info</div>
+            <div className="detail-section-label detail-section-label--row">
+              Info
+              <button
+                className="btn btn-sm ghost"
+                onClick={() => metadata.open([image.id])}
+                aria-label="Edit metadata"
+                title="Edit metadata: date, place, title, author, copyright, camera"
+              >
+                <IconEditMetadata size={13} />
+              </button>
+            </div>
             <ExifTable image={image} />
 
             <button
@@ -1860,9 +1873,18 @@ export function ImageDetail() {
             </button>
           </div>
 
-          {image.gps_lat != null && image.gps_lon != null && (
-            <div className="detail-section">
-              <div className="detail-section-label">Location</div>
+          <div className="detail-section">
+            <div className="detail-section-label detail-section-label--row">
+              Location
+              <button
+                className="btn btn-sm ghost"
+                onClick={() => metadata.open([image.id], "location")}
+                title={image.gps_lat != null ? "Change or remove the place" : "Set where the photo was taken"}
+              >
+                {image.gps_lat != null ? "Change…" : "Add place…"}
+              </button>
+            </div>
+            {image.gps_lat != null && image.gps_lon != null && (
               <MiniMap
                 lat={image.gps_lat}
                 lon={image.gps_lon}
@@ -1872,8 +1894,8 @@ export function ImageDetail() {
                   })
                 }
               />
-            </div>
-          )}
+            )}
+          </div>
 
           {shownSimilar.length > 0 && (
             <div className="detail-section">
@@ -1948,6 +1970,7 @@ export function ImageDetail() {
           />
         )}
       </Presence>
+      {metadata.dialog}
       <Presence open={saveCopyOpen} ms={MOTION.modal}>
         {saveCopyOpen && (
           <SaveCopyDialog

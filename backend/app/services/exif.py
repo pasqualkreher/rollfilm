@@ -4,7 +4,7 @@ import os
 import re
 import signal
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -49,6 +49,10 @@ class ExifData:
     keywords: tuple[str, ...] = ()
     title: str | None = None
     caption: str | None = None
+    # Author and copyright notice (EXIF Artist/Copyright, XMP dc:creator/
+    # dc:rights, IPTC By-line/CopyrightNotice).
+    creator: str | None = None
+    copyright: str | None = None
 
     def to_json(self) -> str:
         data = asdict(self)
@@ -324,7 +328,40 @@ _EXIF_TAGS = [
     "XMP:Title",
     "XMP:Description",
     "IPTC:Caption-Abstract",
+    "IPTC:ObjectName",
+    "EXIF:Artist",
+    "XMP:Creator",
+    "IPTC:By-line",
+    "EXIF:Copyright",
+    "XMP:Rights",
+    "IPTC:CopyrightNotice",
+    # What a sidecar says about the shot itself - the values a metadata edit
+    # writes there (sidecar_shot_args). In the file's own XMP they are only a
+    # fallback; from a sidecar they win (read_exif).
+    "XMP:DateTimeOriginal",
+    "XMP:GPSLatitude",
+    "XMP:GPSLongitude",
+    "XMP:Make",
+    "XMP:Model",
+    "XMP:ISO",
+    "XMP:FNumber",
+    "XMP:ExposureTime",
+    "XMP:FocalLength",
 ]
+
+# The shot's own data a sidecar may carry, which then wins over the file's
+# EXIF: a sidecar is where an edit of the date, place or camera data lives.
+_SIDECAR_SHOT_TAGS = (
+    "XMP:DateTimeOriginal",
+    "XMP:GPSLatitude",
+    "XMP:GPSLongitude",
+    "XMP:Make",
+    "XMP:Model",
+    "XMP:ISO",
+    "XMP:FNumber",
+    "XMP:ExposureTime",
+    "XMP:FocalLength",
+)
 
 # The colour labels the two big writers use, mapped onto the library's own.
 # Lightroom and Bridge write a word in the UI language (the English and
@@ -454,7 +491,9 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
         files.append(str(sidecar))
     results = (helper or _get_helper()).get_tags(files, _EXIF_TAGS)
     metadata = dict(results[0]) if results else {}
+    side: dict = {}
     if sidecar is not None and len(results) > 1:
+        side = {k: v for k, v in results[1].items() if k in _SIDECAR_SHOT_TAGS and v not in (None, "")}
         for key, value in results[1].items():
             # Only the library-side tags: a sidecar's "SourceFile" and its
             # own dates must not displace what the camera wrote.
@@ -482,7 +521,7 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
         if dims:
             width, height = dims
 
-    shutter = metadata.get("EXIF:ExposureTime")
+    shutter = side.get("XMP:ExposureTime") or metadata.get("EXIF:ExposureTime") or metadata.get("XMP:ExposureTime")
     return ExifData(
         width=width,
         height=height,
@@ -494,14 +533,15 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
         # old HTC phones write ONLY this), and for files whose better tags were
         # stripped it's still the in-file date, not the copy date.
         taken_at=_parse_datetime(
-            metadata.get("EXIF:DateTimeOriginal")
+            side.get("XMP:DateTimeOriginal")
+            or metadata.get("EXIF:DateTimeOriginal")
             or metadata.get("EXIF:CreateDate")
             or metadata.get("XMP:DateCreated")
             or metadata.get("XMP:CreateDate")
             or metadata.get("EXIF:ModifyDate")
         ),
-        camera_make=metadata.get("EXIF:Make"),
-        camera_model=metadata.get("EXIF:Model"),
+        camera_make=_text(side.get("XMP:Make")) or _text(metadata.get("EXIF:Make")) or _text(metadata.get("XMP:Make")),
+        camera_model=_text(side.get("XMP:Model")) or _text(metadata.get("EXIF:Model")) or _text(metadata.get("XMP:Model")),
         # First tag with a usable name wins: LensModel is the standard EXIF tag,
         # XMP:Lens covers edited exports, Composite:LensID is exiftool's decoded
         # maker-note lookup for RAWs that write nothing else. Fixed-lens compacts
@@ -521,18 +561,28 @@ def read_exif(path: Path, helper: exiftool.ExifToolHelper | None = None) -> Exif
             ),
             None,
         ),
-        iso=to_int(metadata.get("EXIF:ISO")),
-        aperture=to_float(metadata.get("EXIF:FNumber")),
+        iso=to_int(side.get("XMP:ISO") or metadata.get("EXIF:ISO") or metadata.get("XMP:ISO")),
+        aperture=to_float(side.get("XMP:FNumber") or metadata.get("EXIF:FNumber") or metadata.get("XMP:FNumber")),
         shutter_speed=str(shutter) if shutter not in (None, "", "undef") else None,
-        focal_length=to_float(metadata.get("EXIF:FocalLength")),
-        gps_lat=to_float(metadata.get("Composite:GPSLatitude")),
-        gps_lon=to_float(metadata.get("Composite:GPSLongitude")),
+        focal_length=to_float(
+            side.get("XMP:FocalLength") or metadata.get("EXIF:FocalLength") or metadata.get("XMP:FocalLength")
+        ),
+        gps_lat=to_float(side.get("XMP:GPSLatitude") if "XMP:GPSLongitude" in side else None)
+        or to_float(metadata.get("Composite:GPSLatitude")),
+        gps_lon=to_float(side.get("XMP:GPSLongitude") if "XMP:GPSLatitude" in side else None)
+        or to_float(metadata.get("Composite:GPSLongitude")),
         rating=_rating(metadata.get("XMP:Rating")),
         label=_label(metadata),
         keywords=_keyword_paths(metadata),
-        title=_text(metadata.get("XMP:Title")),
+        title=_text(metadata.get("XMP:Title")) or _text(metadata.get("IPTC:ObjectName")),
         caption=_text(metadata.get("XMP:Description"))
         or _text(metadata.get("IPTC:Caption-Abstract")),
+        creator=_text(metadata.get("XMP:Creator"))
+        or _text(metadata.get("EXIF:Artist"))
+        or _text(metadata.get("IPTC:By-line")),
+        copyright=_text(metadata.get("XMP:Rights"))
+        or _text(metadata.get("EXIF:Copyright"))
+        or _text(metadata.get("IPTC:CopyrightNotice")),
     )
 
 
@@ -551,6 +601,131 @@ class LibraryMetadata:
     label: str | None = None
     # Tag paths as the library keeps them ("Travel/Italy/Rome" or "Rome").
     keywords: tuple[str, ...] = ()
+    # The note / caption, written when there is one.
+    description: str | None = None
+    # The fields changed by hand in the metadata dialog and their values
+    # (metadata_edit.edited_values): written over what the source says.
+    edited: dict = field(default_factory=dict)
+
+
+def _exif_date(value: datetime) -> str:
+    return value.strftime("%Y:%m:%d %H:%M:%S")
+
+
+def _xmp_date(value: datetime) -> str:
+    text = _exif_date(value)
+    offset = value.strftime("%z") if value.tzinfo is not None else ""
+    return f"{text}{offset[:3]}:{offset[3:]}" if offset else text
+
+
+def _offset(value: datetime) -> str:
+    offset = value.strftime("%z") if value.tzinfo is not None else ""
+    return f"{offset[:3]}:{offset[3:]}" if offset else ""
+
+
+def _num(value) -> str:
+    """A number as exiftool's -n mode takes it: no trailing ".0"."""
+    if value is None:
+        return ""
+    f = float(value)
+    return str(int(f)) if f.is_integer() else repr(f)
+
+
+# Where each hand-edited field goes. XMP for a sidecar (it is the only block
+# a sidecar has); EXIF, XMP and IPTC in an export, so every reader finds it.
+_TEXT_TAGS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    # field: (sidecar tags, export tags)
+    "title": (("XMP-dc:Title",), ("XMP-dc:Title", "IPTC:ObjectName")),
+    "creator": (("XMP-dc:Creator",), ("XMP-dc:Creator", "EXIF:Artist", "IPTC:By-line")),
+    "copyright": (("XMP-dc:Rights",), ("XMP-dc:Rights", "EXIF:Copyright", "IPTC:CopyrightNotice")),
+    "camera_make": (("XMP-tiff:Make",), ("EXIF:Make", "XMP-tiff:Make")),
+    "camera_model": (("XMP-tiff:Model",), ("EXIF:Model", "XMP-tiff:Model")),
+    "lens_model": (("XMP-aux:Lens",), ("EXIF:LensModel", "XMP-aux:Lens", "XMP-exifEX:LensModel")),
+}
+_NUMBER_TAGS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "iso": (("XMP-exif:ISO",), ("EXIF:ISO", "XMP-exif:ISO")),
+    "aperture": (("XMP-exif:FNumber",), ("EXIF:FNumber", "XMP-exif:FNumber")),
+    "shutter_speed": (("XMP-exif:ExposureTime",), ("EXIF:ExposureTime", "XMP-exif:ExposureTime")),
+    "focal_length": (("XMP-exif:FocalLength",), ("EXIF:FocalLength", "XMP-exif:FocalLength")),
+}
+
+
+def edited_tag_args(edited: dict, *, sidecar: bool, strip_location: bool = False) -> list[str]:
+    """The exiftool assignments for the fields changed by hand: `edited` maps
+    a field name (metadata_edit.FIELDS) to its value, None = cleared. "gps"
+    is (lat, lon, country) or None. `sidecar` writes XMP only; otherwise
+    EXIF, XMP and IPTC, for an export - where `strip_location` (the export
+    asked for no place) leaves the place out entirely."""
+    args: list[str] = []
+    side = 0 if sidecar else 1
+    iptc = False
+    for name, tags in _TEXT_TAGS.items():
+        if name not in edited:
+            continue
+        value = edited[name] or ""
+        for tag in tags[side]:
+            args.append(f"-{tag}={value}")
+            iptc = iptc or tag.startswith("IPTC:")
+    for name, tags in _NUMBER_TAGS.items():
+        if name not in edited:
+            continue
+        value = _num(edited[name])
+        args += [f"-{tag}={value}" for tag in tags[side]]
+    if "taken_at" in edited and edited["taken_at"] is None and sidecar:
+        # Only "Restore from file" sends this: the sidecar's date goes.
+        args += ["-XMP-exif:DateTimeOriginal=", "-XMP-photoshop:DateCreated="]
+    elif "taken_at" in edited and edited["taken_at"] is not None:
+        when: datetime = edited["taken_at"]
+        if sidecar:
+            args += [
+                f"-XMP-exif:DateTimeOriginal={_xmp_date(when)}",
+                f"-XMP-photoshop:DateCreated={_xmp_date(when)}",
+            ]
+        else:
+            args += [
+                f"-EXIF:DateTimeOriginal={_exif_date(when)}",
+                f"-EXIF:CreateDate={_exif_date(when)}",
+                f"-EXIF:OffsetTimeOriginal={_offset(when)}",
+                f"-XMP-exif:DateTimeOriginal={_xmp_date(when)}",
+                f"-XMP-photoshop:DateCreated={_xmp_date(when)}",
+                f"-XMP-xmp:CreateDate={_xmp_date(when)}",
+                f"-IPTC:DateCreated={when.strftime('%Y:%m:%d')}",
+                f"-IPTC:TimeCreated={when.strftime('%H:%M:%S')}{_offset(when)}",
+            ]
+    if "gps" in edited and not strip_location:
+        place = edited["gps"]
+        if sidecar:
+            if place is None:
+                args += ["-XMP-exif:GPSLatitude=", "-XMP-exif:GPSLongitude=", "-XMP-photoshop:Country="]
+            else:
+                lat, lon, country = place
+                args += [
+                    f"-XMP-exif:GPSLatitude={_num(lat)}",
+                    f"-XMP-exif:GPSLongitude={_num(lon)}",
+                    f"-XMP-photoshop:Country={country or ''}",
+                ]
+        else:
+            # The old fix goes as a whole - an altitude or a direction from
+            # somewhere else must not stay behind - and so do the old place
+            # names; then the new one.
+            args += ["-GPS:all=", "-XMP:GPS*="]
+            args += [f"-{tag}=" for tag in _LOCATION_NAME_TAGS]
+            if place is not None:
+                lat, lon, country = place
+                args += [
+                    f"-GPS:GPSLatitude={_num(abs(lat))}",
+                    f"-GPS:GPSLatitudeRef={'N' if lat >= 0 else 'S'}",
+                    f"-GPS:GPSLongitude={_num(abs(lon))}",
+                    f"-GPS:GPSLongitudeRef={'E' if lon >= 0 else 'W'}",
+                    f"-XMP-exif:GPSLatitude={_num(lat)}",
+                    f"-XMP-exif:GPSLongitude={_num(lon)}",
+                ]
+                if country:
+                    args += [f"-XMP-photoshop:Country={country}", f"-IPTC:Country-PrimaryLocationName={country}"]
+                    iptc = True
+    if iptc:
+        args.append("-IPTC:CodedCharacterSet=UTF8")
+    return args
 
 
 # Where a place name can sit besides the GPS block.
@@ -650,6 +825,15 @@ def write_export_metadata(
         args += keyword_args(library.keywords)
         if library.keywords:
             args.append("-IPTC:CodedCharacterSet=UTF8")
+        if library.description:
+            args += [
+                f"-XMP-dc:Description={library.description}",
+                f"-IPTC:Caption-Abstract={library.description}",
+                f"-EXIF:ImageDescription={library.description}",
+                "-IPTC:CodedCharacterSet=UTF8",
+            ]
+        # Last, so a hand-edited value wins over the one copied from the source.
+        args += edited_tag_args(library.edited, sidecar=False, strip_location=strip_location)
 
     icc_file: Path | None = None
     try:

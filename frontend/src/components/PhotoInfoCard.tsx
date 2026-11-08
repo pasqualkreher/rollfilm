@@ -157,6 +157,9 @@ function InfoCard({
           value={image?.width && image?.height ? `${image.width}×${image.height}` : null}
         />
         <Row label="Place" value={place} />
+        <Row label="Title" value={image?.title ?? null} />
+        <Row label="Author" value={image?.creator ?? null} />
+        <Row label="Copyright" value={image?.copyright ?? null} />
       </dl>
 
       {/* The written note gets its own block under the measured facts - it is

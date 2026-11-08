@@ -40,6 +40,10 @@ class ImageOut(BaseModel):
     import_session_id: str | None = None
     # Free-text note typed in the detail view; null when there's none.
     description: str | None = None
+    # Title, author and copyright notice (file values, or edited by hand).
+    title: str | None = None
+    creator: str | None = None
+    copyright: str | None = None
     # Flagged for selective Immich sync (see settings_store sync modes).
     immich_sync: bool = False
     # Read from Image.visible_paired_image_id, which hides a partner that is on
@@ -300,6 +304,79 @@ class BulkImageUpdate(BaseModel):
     flag: Flag | Literal[""] | None = None
     # Ignored, see ImageUpdate.apply_to_pair.
     apply_to_pair: bool = False
+
+
+class MetadataEdit(BaseModel):
+    image_ids: list[str]
+    # Field -> new value (services/metadata_edit.FIELDS, plus "description").
+    # Null or "" clears a field; a field left out stays as it is. "taken_at"
+    # is wall-clock time ("2024-05-01T14:30"); "gps" is {lat, lon} or null.
+    fields: dict[str, Any] = Field(default_factory=dict)
+    # Moves every photo's capture time by this many seconds (a camera clock
+    # that was off). Ignored when "taken_at" is set.
+    shift_seconds: int | None = None
+
+
+class MetadataIds(BaseModel):
+    image_ids: list[str]
+
+
+class StagedMetadataEdit(BaseModel):
+    file_ids: list[str]
+    # As MetadataEdit.fields / shift_seconds.
+    fields: dict[str, Any] = Field(default_factory=dict)
+    shift_seconds: int | None = None
+
+
+class StagedMetadataIds(BaseModel):
+    file_ids: list[str]
+
+
+class MetadataSummaryOut(BaseModel):
+    count: int
+    # Each field's value where the photos agree, null where they don't.
+    values: dict[str, Any]
+    # The fields the photos disagree on.
+    mixed: list[str]
+    # Whether any of them carries a hand edit "Restore from file" undoes.
+    edited: bool
+    # "City, Country" near the shared location, when there is one.
+    place: str | None = None
+    # First and last capture time of the photos (wall clock), for the
+    # "near in time" place suggestions.
+    taken_range: list[str] | None = None
+
+
+class SuggestedPlace(BaseModel):
+    label: str
+    lat: float
+    lon: float
+    # Photos in the library taken there.
+    count: int
+
+
+class MetadataSuggestionsOut(BaseModel):
+    # Field -> earlier values in the library, most used first.
+    values: dict[str, list[str]]
+    # The places photographed most.
+    places: list[SuggestedPlace]
+    # Places of photos taken within a few hours of the given time range.
+    near: list[SuggestedPlace]
+
+
+class MetadataRevertOut(BaseModel):
+    images: list[ImageOut]
+    # Photos whose file could not be read (a drive not plugged in): unchanged.
+    unreadable: int
+
+
+class PlaceOut(BaseModel):
+    name: str
+    region: str | None = None
+    country: str | None = None
+    lat: float
+    lon: float
+    label: str
 
 
 class BulkDeleteRequest(BaseModel):
@@ -855,6 +932,13 @@ class StagedFileOut(BaseModel):
     focal_length: float | None = None
     gps_lat: float | None = None
     gps_lon: float | None = None
+    # Title, author, copyright and caption (the file's, or edited in the
+    # review), and whether the review edited any metadata of this file.
+    title: str | None = None
+    creator: str | None = None
+    copyright: str | None = None
+    description: str | None = None
+    meta_edited: bool = False
     # Flagged for selective Immich sync during import review.
     immich_sync: bool = False
     # Imported by an earlier partial import of this still-open session - it

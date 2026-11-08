@@ -42,6 +42,7 @@ import {
 } from "../utils/importReviewState";
 import {
   IconDuplicate,
+  IconEditMetadata,
   IconFolder,
   IconGear,
   IconImage,
@@ -54,6 +55,7 @@ import {
   IconX,
 } from "../components/Icons";
 import { Presence } from "../components/Presence";
+import { importMetadataSource, useMetadataDialog } from "../components/useMetadataDialog";
 import { MOTION } from "../utils/usePresence";
 import { Spinner } from "../components/Spinner";
 import { plural } from "../utils/plural";
@@ -450,6 +452,16 @@ export function ImportWizard() {
   // rail must stay clear of.
   const actionBarRef = useRef<HTMLDivElement | null>(null);
   const queryClient = useQueryClient();
+  // Date, place, title, author and camera data of files in the review, kept
+  // with the review and applied at import.
+  const metadataSource = useMemo(
+    () =>
+      sessionId
+        ? importMetadataSource(sessionId, () => void queryClient.invalidateQueries({ queryKey: ["import-files", sessionId] }))
+        : undefined,
+    [sessionId, queryClient]
+  );
+  const metadata = useMetadataDialog(metadataSource);
   const dialogs = useAppDialogs();
   // Cancel throws away everything this run has copied - one click on a button
   // that sits right beside "Stop & keep" must not be all it takes. The copy
@@ -1844,6 +1856,16 @@ export function ImportWizard() {
               value={markedMeta.colorLabel}
               onChange={(color_label) => applyToMarked({ color_label })}
             />
+            <button
+              type="button"
+              className="btn"
+              onClick={() => metadata.open(withPartners(markedFiles).map((f) => f.id))}
+              title="Edit date, place, title, author, copyright and camera data of the selected photos"
+            >
+              <span className="btn-label">
+                <IconEditMetadata size={13} /> Metadata…
+              </span>
+            </button>
             {/* The same Import box as a card's footer - symbol, word, box -
                 so the row reads as the cards' controls for all picked at once;
                 lit up once the picked photos come in. */}
@@ -2050,9 +2072,11 @@ export function ImportWizard() {
             onUpdate={(fileId, patch) => updateStaged.mutate({ fileId, patch })}
             showImmichSync={immichConfigured && immichMode === "selective"}
             pairsMerged={mergePairs && viewMode === "combined"}
+            onEditMetadata={(fileId) => metadata.open([fileId])}
           />
         )}
       </Presence>
+      {metadata.dialog}
     </div>
   );
 }

@@ -226,6 +226,8 @@ class Place:
     lat: float
     lon: float
     country: str | None
+    # The state / province, to tell apart places of the same name.
+    region: str | None = None
 
     @property
     def label(self) -> str:
@@ -359,7 +361,10 @@ def place_candidates(query: str, lang: str | None = None) -> list[Place]:
     if not rows:
         return []
     return [
-        Place(name=r["name"], lat=r["lat"], lon=r["lon"], country=_country_name(r["cc"]))
+        Place(
+            name=r["name"], lat=r["lat"], lon=r["lon"], country=_country_name(r["cc"]),
+            region=r.get("admin1") or None,
+        )
         for r in rows
     ]
 

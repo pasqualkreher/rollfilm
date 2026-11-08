@@ -13,6 +13,10 @@ export interface ExifFields {
   aperture?: number | null;
   shutter_speed?: string | null;
   focal_length?: number | null;
+  // Shown only when the photo has them (the library photo view).
+  title?: string | null;
+  creator?: string | null;
+  copyright?: string | null;
 }
 
 // The photo's capture info as a two-column table: the library photo view's
@@ -54,6 +58,24 @@ export function ExifTable({ image }: { image: ExifFields }) {
           <td>Focal length</td>
           <td>{image.focal_length ? `${image.focal_length}mm` : "—"}</td>
         </tr>
+        {image.title && (
+          <tr>
+            <td>Title</td>
+            <td>{image.title}</td>
+          </tr>
+        )}
+        {image.creator && (
+          <tr>
+            <td>Author</td>
+            <td>{image.creator}</td>
+          </tr>
+        )}
+        {image.copyright && (
+          <tr>
+            <td>Copyright</td>
+            <td>{image.copyright}</td>
+          </tr>
+        )}
       </tbody>
     </table>
   );

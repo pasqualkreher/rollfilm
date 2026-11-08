@@ -60,6 +60,10 @@ export interface ImageOut {
   flag?: Flag | null;
   // Free-text note typed in the detail view; null when there is none.
   description: string | null;
+  // Title, author and copyright notice (from the file, or edited by hand).
+  title?: string | null;
+  creator?: string | null;
+  copyright?: string | null;
   immich_sync: boolean;
   paired_image_id: string | null;
   source_root_id: string | null;
@@ -651,6 +655,13 @@ export interface StagedFileOut {
   focal_length: number | null;
   gps_lat: number | null;
   gps_lon: number | null;
+  // Title, author, copyright and caption (the file's or edited in the
+  // review), and whether the review edited this file's metadata.
+  title?: string | null;
+  creator?: string | null;
+  copyright?: string | null;
+  description?: string | null;
+  meta_edited?: boolean;
   immich_sync: boolean;
   // Added to the library by an earlier partial import of this session - it
   // now reads as "already in library" (duplicate_of_image_id is that photo).
@@ -1013,4 +1024,59 @@ export interface TagUsage {
 export interface TagImportResult {
   created: number;
   existing: number;
+}
+
+// The metadata dialog (components/MetadataDialog.tsx). Field names as the
+// backend's services/metadata_edit.py has them.
+export type MetaField =
+  | "taken_at"
+  | "gps"
+  | "title"
+  | "creator"
+  | "copyright"
+  | "camera_make"
+  | "camera_model"
+  | "lens_model"
+  | "iso"
+  | "aperture"
+  | "shutter_speed"
+  | "focal_length"
+  | "description";
+
+export interface MetadataSummary {
+  count: number;
+  // A field's value where the photos agree, null where they don't (and in
+  // `mixed`). taken_at is wall-clock "2024-05-01T14:30:00"; gps {lat, lon}.
+  values: Partial<Record<MetaField, unknown>>;
+  mixed: MetaField[];
+  // Any of them carries a hand edit that "Restore from file" undoes.
+  edited: boolean;
+  place: string | null;
+  // First and last capture time (wall clock), for "near in time" places.
+  taken_range?: [string, string] | null;
+}
+
+export interface SuggestedPlace {
+  label: string;
+  lat: number;
+  lon: number;
+  // Photos in the library taken there.
+  count: number;
+}
+
+// What the metadata dialog offers from the library (backend
+// metadata_edit.suggestions).
+export interface MetadataSuggestions {
+  values: Partial<Record<MetaField, string[]>>;
+  places: SuggestedPlace[];
+  near: SuggestedPlace[];
+}
+
+export interface PlaceHit {
+  name: string;
+  region: string | null;
+  country: string | null;
+  lat: number;
+  lon: number;
+  label: string;
 }

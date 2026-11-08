@@ -45,6 +45,7 @@ from app.db.models import (
 from app.db.session import SessionLocal, engine, get_db
 from app.services import smart_albums as smart_albums_service
 from app.services import machine
+from app.services import metadata_edit
 from app.services import (
     arrange as arrange_service,
     auto_develop,
@@ -710,6 +711,49 @@ def geo_index(
     )
 
 
+@router.get("/places", response_model=list[schemas.PlaceOut])
+def search_places(q: str = "", lang: str | None = None, current_user: User = Depends(get_current_user)):
+    """Towns and cities whose name matches `q` ("rome", "rome, italy"), for
+    setting a photo's place by name. Offline (geocode's bundled list)."""
+    places = geocode.place_candidates(q, lang=lang)[:12] if len(q.strip()) >= 2 else []
+    return [
+        schemas.PlaceOut(
+            name=p.name, region=p.region, country=p.country, lat=p.lat, lon=p.lon,
+            label=", ".join(x for x in (p.name, p.region if p.region != p.name else None, p.country) if x),
+        )
+        for p in places
+    ]
+
+
+@router.get("/metadata/suggestions", response_model=schemas.MetadataSuggestionsOut)
+def metadata_suggestions(
+    start: str | None = None,
+    end: str | None = None,
+    exclude: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Suggestions for the metadata dialog from the library: earlier authors,
+    copyrights, cameras and lenses, the places photographed most, and the
+    places of photos taken near `start`..`end` (wall clock; `exclude` =
+    comma-separated ids of the photos being edited)."""
+    def when(text: str | None):
+        try:
+            return datetime.fromisoformat(text) if text else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Not a date: {text}") from None
+
+    ids = [i for i in (exclude or "").split(",") if i]
+    return metadata_edit.suggestions(db, current_user.id, when(start), when(end), ids[:2000])
+
+
+@router.get("/place-label")
+def place_label(lat: float, lon: float, current_user: User = Depends(get_current_user)):
+    """"City, Country" nearest a point - what a pin set on the map is called."""
+    labels = geocode.place_labels_for([(lat, lon)])
+    return {"label": labels[0] if labels else None}
+
+
 @router.get("/count", response_model=schemas.ImageCountOut)
 def count_images(
     view_mode: Literal["combined", "jpeg_only", "raw_only"] = "combined",
@@ -1033,6 +1077,75 @@ def bulk_update_images(
     return images
 
 
+@router.post("/metadata/summary", response_model=schemas.MetadataSummaryOut)
+def metadata_summary(
+    payload: schemas.MetadataIds,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """What the metadata dialog starts from for these photos."""
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    if not images:
+        raise HTTPException(status_code=400, detail="No photos given.")
+    # One photo from before title/author/copyright were read at import:
+    # read them now, so the dialog shows what the file says.
+    if len(images) == 1:
+        helper = exif_service.new_helper()
+        try:
+            if metadata_edit.backfill_text_from_file(images[0], helper=helper):
+                db.commit()
+        finally:
+            helper.terminate()
+    return metadata_edit.summary(images)
+
+
+@router.post("/metadata", response_model=list[schemas.ImageOut])
+def edit_metadata(
+    payload: schemas.MetadataEdit,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set capture time, place, title, author, copyright, caption or camera
+    data on one photo or many (and their RAW+JPEG partners). Stored in the
+    library and written to the sidecar and every export - the original file
+    is not changed (services/metadata_edit.py)."""
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    try:
+        changed = metadata_edit.apply_edit(
+            images, payload.fields, payload.shift_seconds,
+            lambda image: _pair_partner(db, current_user.id, image),
+        )
+    except metadata_edit.MetadataError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    db.commit()
+    sidecar_service.touch(db, changed)
+    for image in images:
+        db.refresh(image)
+    return images
+
+
+@router.post("/metadata/revert", response_model=schemas.MetadataRevertOut)
+def revert_metadata(
+    payload: schemas.MetadataIds,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Forget the hand edits of these photos: back to what their files say."""
+    images = [get_owned_image(db, current_user.id, image_id) for image_id in payload.image_ids]
+    helper = exif_service.new_helper()
+    try:
+        changed, unreadable = metadata_edit.revert(
+            images, lambda image: _pair_partner(db, current_user.id, image), helper=helper
+        )
+    finally:
+        helper.terminate()
+    db.commit()
+    sidecar_service.touch(db, changed)
+    for image in images:
+        db.refresh(image)
+    return {"images": images, "unreadable": unreadable}
+
+
 @router.post("/usage", response_model=schemas.ImageUsageOut)
 def image_usage(
     payload: schemas.BulkDeleteRequest,
@@ -1238,6 +1351,8 @@ def _export_library_metadata(db: Session, image: Image) -> exif_service.LibraryM
         rating=image.rating or 0,
         label=None if label in (None, ColorLabel.none) else label.value,
         keywords=tuple(names),
+        description=image.description,
+        edited=metadata_edit.edited_values(image),
     )
 
 
@@ -3027,6 +3142,10 @@ def create_virtual_copy(
         gps_lat=source.gps_lat,
         gps_lon=source.gps_lon,
         gps_country=source.gps_country,
+        title=source.title,
+        creator=source.creator,
+        copyright=source.copyright,
+        meta_edited=source.meta_edited,
         rating=template.rating,
         color_label=template.color_label,
         description=template.description,

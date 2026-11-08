@@ -9,7 +9,7 @@ import { Spinner } from "./Spinner";
 // Leaflet's default marker locates its icon images at runtime relative to its
 // stylesheet, which breaks under Vite's bundling - the pin renders as a
 // broken-image placeholder. Import the images through the bundler instead.
-const pinIcon = L.icon({
+export const pinIcon = L.icon({
   iconUrl: markerIcon,
   iconRetinaUrl: markerIcon2x,
   shadowUrl: markerShadow,

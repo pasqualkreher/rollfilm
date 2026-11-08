@@ -6,7 +6,8 @@ import { ColorLabelPicker } from "./ColorLabelPicker";
 import { fileTypeBadge, fileTypeBadgeClass } from "./ThumbnailGrid";
 import { flaggedDuplicate } from "./ImportReviewGrid";
 import { LIGHTBOX_NEIGHBOR_DEPTH, PinnedImageWindow } from "../utils/preload";
-import { IconChevronLeft, IconChevronRight, IconImage, IconImport, IconRotate } from "./Icons";
+import { IconChevronLeft, IconChevronRight, IconEditMetadata, IconImage, IconImport, IconRotate } from "./Icons";
+import { isModalOpen } from "../utils/modalKeys";
 import { ExifTable } from "./ExifTable";
 import { useImageZoomPan } from "../utils/useImageZoomPan";
 import { useFullResUpgrade } from "../utils/useFullResUpgrade";
@@ -33,6 +34,8 @@ interface Props {
   // Set by <Presence> while the lightbox fades out: keys are ignored, so an
   // arrow pressed during the fade cannot reopen it on the neighbour.
   closing?: boolean;
+  // Opens the metadata dialog for this file (the page owns it).
+  onEditMetadata?: (fileId: string) => void;
 }
 
 export function ImportLightbox({
@@ -45,6 +48,7 @@ export function ImportLightbox({
   showImmichSync = false,
   pairsMerged = false,
   closing = false,
+  onEditMetadata,
 }: Props) {
   const file = files[index];
   // The preview failed to load (damaged/unreadable file). Show a clean error
@@ -122,6 +126,8 @@ export function ImportLightbox({
     const duplicate = flaggedDuplicate(file);
     function onKeyDown(e: KeyboardEvent) {
       if (closing) return;
+      // A dialog over the lightbox (metadata) has the keyboard.
+      if (isModalOpen()) return;
       // Don't hijack keys while a text/choice control (checkbox, select,
       // text field) has focus - let it handle its own Space/Enter natively.
       // BUTTONS are deliberately NOT exempt: after clicking the ‹/› arrows
@@ -409,7 +415,19 @@ export function ImportLightbox({
             from the analysis; until it has run the rows read "—". */}
         <div id="import-info-panel" className={`detail-panel${infoOpen ? "" : " detail-panel--collapsed"}`}>
           <div className="detail-section">
-            <div className="detail-section-label">Camera settings</div>
+            <div className="detail-section-label detail-section-label--row">
+              Camera settings
+              {onEditMetadata && (
+                <button
+                  className="btn btn-sm ghost"
+                  onClick={() => onEditMetadata(file.id)}
+                  aria-label="Edit metadata"
+                  title="Edit metadata: date, place, title, author, copyright, camera"
+                >
+                  <IconEditMetadata size={13} />
+                </button>
+              )}
+            </div>
             <ExifTable image={file} />
           </div>
         </div>

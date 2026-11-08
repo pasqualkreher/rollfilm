@@ -19,7 +19,8 @@ import { TagFilter } from "../components/TagFilter";
 import { BulkTagInput } from "../components/BulkTagInput";
 import { ResetMenu } from "../components/ResetMenu";
 import { EditPicker } from "../components/EditPicker";
-import { IconCheck, IconCloudUp, IconExport, IconMinus, IconRename, IconSort, IconSparkle, IconTrash, IconX, IconTag } from "../components/Icons";
+import { IconCheck, IconEditMetadata, IconCloudUp, IconExport, IconMinus, IconRename, IconSort, IconSparkle, IconTrash, IconX, IconTag } from "../components/Icons";
+import { useMetadataDialog } from "../components/useMetadataDialog";
 import { AutoPickDialog } from "../components/AutoPickDialog";
 import { ExportDialog } from "../components/ExportDialog";
 import { ImmichSyncToggle } from "../components/ImmichSyncToggle";
@@ -95,6 +96,8 @@ export function AlbumDetail() {
   const barRef = useBarHeight();
   // Export for the selection: the bar's button, the dialog, ⇧⌘E.
   const selectionExport = useSelectionExport(Array.from(selected));
+  // Date, place, title, author and camera data of the selection.
+  const metadata = useMetadataDialog();
   // The photo the last click landed on, by id: a shift-click selects the run
   // between it and the clicked photo in the order on screen NOW. By index it
   // went wrong once the list changed under it - a filter that left fewer
@@ -856,6 +859,7 @@ export function AlbumDetail() {
     <div className="page page-timeline">
       {pairDeleteDialog}
       {selectionExport.dialog}
+      {metadata.dialog}
       <Presence open={autoPick !== null} ms={MOTION.modal}>
         {autoPick && (
           <AutoPickDialog
@@ -1007,9 +1011,23 @@ export function AlbumDetail() {
               <RatingStars rating={sharedMeta.rating} onChange={(r) => applyBulk({ rating: r })} />
               <ColorLabelPicker value={sharedMeta.colorLabel} onChange={(c) => applyBulk({ color_label: c })} />
               <BulkTagInput onAdd={addTagToSelected} />
+              <button
+                className="btn"
+                onClick={() => metadata.open(Array.from(selected))}
+                title="Edit date, place, title, author, copyright and camera data of the selected photos"
+              >
+                <span className="btn-label">
+                  <IconEditMetadata size={13} /> Metadata…
+                </span>
+              </button>
             </div>
+            {/* Describe, organise, develop, output: left to right. */}
             <div className="control-group">
-              {selectionExport.button}
+              <AddToPicker
+                onAddToAlbum={addSelectedToAlbum}
+                onAddToCanvas={addSelectedToCanvas}
+                onResult={reportAddTo}
+              />
               <button
                 className="btn"
                 onClick={() => setAutoPick(Array.from(selected))}
@@ -1019,13 +1037,6 @@ export function AlbumDetail() {
                   <IconSparkle size={13} /> Find similar…
                 </span>
               </button>
-            </div>
-            <div className="control-group">
-              <AddToPicker
-                onAddToAlbum={addSelectedToAlbum}
-                onAddToCanvas={addSelectedToCanvas}
-                onResult={reportAddTo}
-              />
             </div>
             {/* Hidden in full sync mode - everything uploads automatically there.
                 The whole group goes, not just the button, so no empty gap is
@@ -1057,6 +1068,7 @@ export function AlbumDetail() {
                 <span className="btn-label"><IconMinus size={13} /> Remove from this album</span>
               </button>
             </div>
+            <div className="control-group">{selectionExport.button}</div>
             <button
               className="btn btn-sm quiet-danger"
               style={{ marginLeft: "auto" }}

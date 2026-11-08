@@ -40,6 +40,7 @@ from app.db.models import ColorLabel, FileType, Image
 from app.db.session import SessionLocal
 from app.services import develop
 from app.services import exif as exif_service
+from app.services import metadata_edit
 from app.services import tags as tags_service
 from app.services.filesystem import resolve_image_path, strip_virtual_marker
 from app.services.settings_store import get_sidecar_write
@@ -117,6 +118,9 @@ def _args(image: Image, tags: list[str]) -> list[str]:
             f"-XMP-digiKam:TagsList={'/'.join(parts)}",
         ]
     args.append("-XMP-dc:Description=" + (image.description or ""))
+    # The date, place, title, author and camera data changed by hand: the
+    # sidecar is where an edit of those lives, and a new import reads it back.
+    args += exif_service.edited_tag_args(metadata_edit.edited_values(image), sidecar=True)
     return args
 
 

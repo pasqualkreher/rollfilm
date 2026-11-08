@@ -11,6 +11,7 @@ import { ExportDialog } from "./ExportDialog";
 import { PickerDialog, type PickerGroup } from "./PickerDialog";
 import { noteRecent, shortList } from "../utils/recents";
 import { SaveCopyDialog, type SaveCopyRequest } from "./SaveCopyDialog";
+import { useMetadataDialog } from "./useMetadataDialog";
 import { useAppDialogs } from "./AppDialogs";
 import { RatingStars } from "./RatingStars";
 import { ColorLabelPicker } from "./ColorLabelPicker";
@@ -529,6 +530,8 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
   // as a note at the bottom of the window.
   const [note, setNote] = useTransientMessage(6000);
   const saveCopiesOf = useSaveCopies(setNote);
+  // Date, place, title, author, camera data - for the photos the menu acts on.
+  const metadata = useMetadataDialog();
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
@@ -710,6 +713,10 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
       });
     }
     if (actions?.onAddTag) change.push({ kind: "item", id: "tag", label: "Add tag", submenu: "tag", run: () => {} });
+    // On the pages that change photos (not the Trash).
+    if (actions?.onRate) {
+      change.push({ kind: "item", id: "metadata", label: "Edit metadata…", run: run(() => metadata.open(t.ids)) });
+    }
     groups.push(change);
 
     // The bar's "Save as…": export, or a copy of each photo.
@@ -954,6 +961,7 @@ export function usePhotoContextMenu(selectedIds: Set<string> | undefined, option
           />
         )}
       </Presence>
+      {metadata.dialog}
       <Presence open={dialog?.kind === "copy"} ms={MOTION.modal}>
         {dialog?.kind === "copy" && (
           <SaveCopyDialog

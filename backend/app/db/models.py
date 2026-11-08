@@ -177,6 +177,17 @@ class Image(Base):
     # Free-text note typed in the detail view. Database-only, like every other
     # edit here - the original file is never rewritten. Null or "" = no note.
     description: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Title, author and copyright notice: read from the file at import, and
+    # editable in the metadata dialog (services/metadata_edit.py).
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    creator: Mapped[str | None] = mapped_column(String, nullable=True)
+    copyright: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The metadata fields the user changed by hand, comma-separated
+    # ("taken_at,gps,creator"; see metadata_edit.FIELDS). Those values are the
+    # library's word: the sidecar and every export write them over what the
+    # file says, and nothing that re-reads the file (repair dates) touches
+    # them. Null = nothing edited. The original file is never rewritten.
+    meta_edited: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Selective Immich sync: when set, this photo is synced to Immich (JPEG only)
     # automatically - on import and when the flag is toggled on. Ignored in the
@@ -560,6 +571,10 @@ class ImportStagedFile(Base):
     # committed Image row, which then uploads right after import (selective
     # mode only - see import_pipeline.commit_import_session).
     immich_sync: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Metadata edited in the review (date, place, title, author, camera...),
+    # JSON field -> value, laid over exif_json and carried onto the photo at
+    # commit as hand edits (services/metadata_edit.py). Null = none.
+    meta_edits: Mapped[str | None] = mapped_column(String, nullable=True)
 
     import_session: Mapped["ImportSession"] = relationship(back_populates="staged_files")
 
