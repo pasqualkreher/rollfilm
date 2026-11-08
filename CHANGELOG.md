@@ -4,6 +4,21 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.2.5 — 2026-11-08
+
+### New
+- Edit metadata: capture date and time, place, title, caption, author, copyright and camera data (body, lens, ISO, aperture, shutter, focal length - handy for film scans), for one photo or a whole selection. From the right-click menu, the photo view (the icon beside Info), the selection bar ("Metadata…") and the import review.
+- For a selection, the date can be set for all or shifted by days, hours and minutes - for a camera clock that was off. Fields the photos disagree on show "Mixed" and stay as they are unless you type into them.
+- Place: search a town, click the map or drag the pin, paste coordinates, or remove the place. The country follows by itself.
+- Suggestions from your library: earlier authors, copyrights, cameras and lenses while typing; places of photos taken around the same time, then the places you photographed most.
+- Import review: metadata can be edited before importing (selection bar and the preview's Camera settings); the photos come in with it.
+
+### Improved
+- Your original files are never changed: edits are kept in the library and the .xmp sidecar, every export and saved copy carries them, and a sidecar written this way is read back when the photos are imported again. "Restore from file" takes a photo back to what its file says.
+- Title, author and copyright are read from the files at import and shown in the photo view and on the info card; exports also carry the caption.
+- Repair dates leaves dates set by hand alone.
+- The selection bar reads left to right: describe (flag, stars, colour, tags, metadata), organise (Add to, Find similar), develop (Edit, Reset), then Save as.
+
 ## 0.2.4 — 2026-11-01
 
 ### New
