@@ -4,6 +4,16 @@ What changed in each version of Rollfilm, newest first. The app shows the part y
 
 <!-- One line per point: GitHub's release pages keep line breaks. Sections: New, Improved, Fixed, Safety. -->
 
+## 0.2.6 — 2026-11-17
+
+### New
+- Edit metadata: the capture date is set part by part - day, month, year, hour, minute, second. Change only the year of old scans and each photo keeps its own day and time; in a selection, parts the photos disagree on show "–" and stay as they are unless typed into.
+- Shift by now also takes years and months, following the calendar (31 January + 1 month = end of February), so a selection spread over several years moves without losing the gaps between the photos.
+
+### Improved
+- The date fields show what the date becomes before saving. A day the month lacks becomes its last day (29 February in a year without one = 28 February), and a photo without a date takes one once day, month and year are set.
+- The "Keep" choice for a selection's date is gone: a part left alone already stays as it is. The choices are now Set and Shift by.
+
 ## 0.2.5 — 2026-11-08
 
 ### New
