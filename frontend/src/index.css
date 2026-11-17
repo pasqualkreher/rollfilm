@@ -15379,7 +15379,7 @@ input:hover:not(:disabled),
 .meta-shift {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -15396,7 +15396,63 @@ input:hover:not(:disabled),
 }
 
 .meta-modal .meta-shift-unit input {
-  width: 58px;
+  width: 44px;
+  padding-left: 6px;
+  padding-right: 4px;
+}
+
+.meta-date {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meta-date-parts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.meta-modal .meta-date-parts input {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.meta-modal .meta-date-parts .meta-part-short {
+  width: 3.4em;
+}
+
+.meta-modal .meta-date-parts .meta-part-year {
+  width: 5em;
+}
+
+.meta-modal .meta-date-parts .meta-part-month {
+  width: auto;
+  min-width: 8.5em;
+}
+
+.meta-date-sep {
+  color: var(--text-muted);
+}
+
+.meta-modal input.is-invalid,
+.meta-modal select.is-invalid {
+  border-color: var(--danger);
+}
+
+.meta-modal select.is-mixed {
+  font-style: italic;
+}
+
+.meta-date-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 106px;
+}
+
+.meta-hint--error {
+  color: var(--danger);
 }
 
 .meta-place-search {

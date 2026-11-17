@@ -111,6 +111,95 @@ def test_typed_time_keeps_the_stored_zone():
     assert image.taken_at == datetime(2026, 7, 2, 8, 15, 30, tzinfo=zone)
 
 
+
+def test_one_date_part_changes_and_each_photo_keeps_the_rest():
+    zone = timezone(timedelta(hours=2))
+    a = _image("a", taken_at=datetime(1995, 3, 4, 9, 15, 30, tzinfo=zone))
+    b = _image("b", taken_at=datetime(1996, 12, 31, 23, 5))
+    metadata_edit.apply_edit([a, b], {}, None, lambda i: None, date_parts={"year": 1987})
+    assert a.taken_at == datetime(1987, 3, 4, 9, 15, 30, tzinfo=zone)
+    assert b.taken_at == datetime(1987, 12, 31, 23, 5)
+    assert "taken_at" in metadata_edit.edited_fields(a)
+
+
+def test_date_parts_together_and_the_time_alone():
+    image = _image("a", taken_at=datetime(2026, 7, 1, 12, 0, 0))
+    metadata_edit.apply_edit([image], {}, None, lambda i: None, date_parts={"day": "3", "month": 5})
+    assert image.taken_at == datetime(2026, 5, 3, 12, 0, 0)
+    metadata_edit.apply_edit([image], {}, None, lambda i: None, date_parts={"hour": 8, "minute": 45, "second": 10})
+    assert image.taken_at == datetime(2026, 5, 3, 8, 45, 10)
+
+
+def test_a_day_the_month_lacks_becomes_its_last_day():
+    leap = _image("a", taken_at=datetime(2024, 2, 29, 10, 0))
+    long = _image("b", taken_at=datetime(2024, 1, 31, 10, 0))
+    metadata_edit.apply_edit([leap], {}, None, lambda i: None, date_parts={"year": 2023})
+    metadata_edit.apply_edit([long], {}, None, lambda i: None, date_parts={"month": 4})
+    assert leap.taken_at == datetime(2023, 2, 28, 10, 0)
+    assert long.taken_at == datetime(2024, 4, 30, 10, 0)
+
+
+def test_a_photo_without_a_date_gets_one_only_from_a_whole_date():
+    image = _image("a", taken_at=None)
+    metadata_edit.apply_edit([image], {}, None, lambda i: None, date_parts={"year": 1987})
+    assert image.taken_at is None
+    assert image.meta_edited is None
+    metadata_edit.apply_edit([image], {}, None, lambda i: None, date_parts={"year": 1987, "month": 6, "day": 2})
+    assert image.taken_at == datetime(1987, 6, 2, 0, 0, 0)
+
+
+def test_unchanged_parts_mark_nothing():
+    image = _image("a")
+    metadata_edit.apply_edit([image], {}, None, lambda i: None, date_parts={"year": 2026})
+    assert image.meta_edited is None
+
+
+def test_a_month_shift_follows_the_calendar_and_combines_with_seconds():
+    a = _image("a", taken_at=datetime(2024, 1, 31, 10, 0))
+    b = _image("b", taken_at=datetime(2025, 1, 15, 23, 30))
+    metadata_edit.apply_edit([a], {}, None, lambda i: None, shift_months=1)
+    metadata_edit.apply_edit([b], {}, 3600, lambda i: None, shift_months=-12)
+    assert a.taken_at == datetime(2024, 2, 29, 10, 0)
+    assert b.taken_at == datetime(2024, 1, 16, 0, 30)
+
+
+def test_parts_win_over_a_shift_and_taken_at_over_parts():
+    image = _image("a")
+    metadata_edit.apply_edit([image], {}, 3600, lambda i: None, date_parts={"year": 2000}, shift_months=5)
+    assert image.taken_at == datetime(2000, 7, 1, 12, 0)
+    metadata_edit.apply_edit([image], {"taken_at": "2010-01-02T03:04"}, None, lambda i: None, date_parts={"year": 1990})
+    assert image.taken_at == datetime(2010, 1, 2, 3, 4)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"date_parts": {"month": 13}},
+        {"date_parts": {"day": 0}},
+        {"date_parts": {"hour": "noon"}},
+        {"date_parts": {"year": 1987.5}},
+        {"date_parts": {"week": 3}},
+        {"shift_months": -12 * 300},
+    ],
+)
+def test_a_bad_date_part_or_shift_changes_nothing(kw):
+    a = _image("a")
+    b = _image("b", taken_at=datetime(1850, 1, 1))
+    with pytest.raises(metadata_edit.MetadataError):
+        metadata_edit.apply_edit([a, b], {"creator": "Ana"}, None, lambda i: None, **kw)
+    assert a.taken_at == datetime(2026, 7, 1, 12, 0) and a.creator is None
+    assert a.meta_edited is None and b.meta_edited is None
+
+
+def test_summary_reports_the_date_parts_and_the_undated():
+    a = _image("a", taken_at=datetime(1995, 3, 4, 9, 15, 30))
+    b = _image("b", taken_at=datetime(1995, 3, 9, 9, 15, 30))
+    c = _image("c", taken_at=None)
+    out = metadata_edit.summary([a, b, c])
+    assert out["taken_parts"] == {"year": 1995, "month": 3, "day": None, "hour": 9, "minute": 15, "second": 30}
+    assert out["undated"] == 1
+
+
 @pytest.mark.parametrize(
     "fields",
     [

@@ -15,6 +15,7 @@ this app put there.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 import math
@@ -225,6 +226,118 @@ def parse_shift(shift_seconds: int | None) -> timedelta | None:
     return shift
 
 
+def parse_shift_months(shift_months: int | None) -> int:
+    months = int(shift_months or 0)
+    if abs(months) > 12 * 400:
+        raise MetadataError("That shift is too large.")
+    return months
+
+
+# The parts of a capture time that can be set one by one ("only the year is
+# wrong"), with the values each may take. A part left out stays as each
+# photo has it.
+DATE_PARTS: dict[str, tuple[int, int]] = {
+    "year": (1800, 2200),
+    "month": (1, 12),
+    "day": (1, 31),
+    "hour": (0, 23),
+    "minute": (0, 59),
+    "second": (0, 59),
+}
+
+
+def parse_date_parts(parts: dict[str, Any] | None) -> dict[str, int]:
+    """{"year": 1987, ...} checked: whole numbers in range. None/"" = the
+    part is left alone."""
+    if not parts:
+        return {}
+    unknown = set(parts) - set(DATE_PARTS)
+    if unknown:
+        raise MetadataError(f"Unknown date part: {', '.join(sorted(unknown))}")
+    out: dict[str, int] = {}
+    for name, value in parts.items():
+        if value is None or str(value).strip() == "":
+            continue
+        try:
+            number = float(str(value).strip())
+        except ValueError:
+            raise MetadataError(f"“{value}” is not a {name}.") from None
+        if not number.is_integer():
+            raise MetadataError(f"“{value}” is not a {name}.")
+        low, high = DATE_PARTS[name]
+        if not low <= number <= high:
+            raise MetadataError(f"The {name} goes from {low} to {high}.")
+        out[name] = int(number)
+    return out
+
+
+def _last_day(year: int, month: int) -> int:
+    return calendar.monthrange(year, month)[1]
+
+
+def _add_months(when: datetime, months: int) -> datetime:
+    """Calendar months later (or earlier); a day the target month lacks
+    becomes its last day (31 Jan + 1 month = 28/29 Feb)."""
+    if not months:
+        return when
+    year, index = divmod(when.month - 1 + months, 12)
+    year += when.year
+    if not 1 <= year <= 9999:
+        raise MetadataError("That date is out of range.")
+    month = index + 1
+    return when.replace(year=year, month=month, day=min(when.day, _last_day(year, month)))
+
+
+def _with_parts(current: datetime | None, parts: dict[str, int]) -> datetime | None:
+    """`current` with the given parts set; a day the month lacks becomes its
+    last day (29 Feb in a year without one = 28 Feb). A photo without a date
+    gets one only when year, month and day are all given (the time parts
+    left out are 0); otherwise it stays without (None)."""
+    if not parts:
+        return current
+    if current is None:
+        if not {"year", "month", "day"} <= parts.keys():
+            return None
+        current = datetime(parts["year"], parts["month"], 1)
+    year = parts.get("year", current.year)
+    month = parts.get("month", current.month)
+    day = min(parts.get("day", current.day), _last_day(year, month))
+    return current.replace(
+        year=year,
+        month=month,
+        day=day,
+        hour=parts.get("hour", current.hour),
+        minute=parts.get("minute", current.minute),
+        second=parts.get("second", current.second),
+    )
+
+
+def _new_taken_at(
+    current: datetime | None,
+    parts: dict[str, int],
+    shift_months: int,
+    shift: timedelta | None,
+) -> datetime | None:
+    """A photo's capture time after a date edit by parts or a shift; None =
+    the photo keeps what it has (no date to change). Raises MetadataError
+    when the result leaves the range a date may have."""
+    if parts:
+        new = _with_parts(current, parts)
+    elif current is not None and (shift_months or shift is not None):
+        new = _add_months(current, shift_months)
+        try:
+            new = new + shift if shift is not None else new
+        except OverflowError:
+            raise MetadataError("That date is out of range.") from None
+    else:
+        return None
+    if new is None or new == current:
+        return None
+    if not 1800 <= new.year <= 2200:
+        raise MetadataError("That shift moves a date out of range.")
+    return new
+
+
 def set_parsed(image: Image, parsed: dict[str, Any], country: str | None) -> None:
     """Put parsed values onto a photo's columns and mark them as hand-edited
     (all but the note). `country` is the one looked up for parsed["gps"]."""
@@ -256,15 +369,23 @@ def apply_edit(
     fields: dict[str, Any],
     shift_seconds: int | None,
     partner_of: Callable[[Image], Image | None],
+    *,
+    date_parts: dict[str, Any] | None = None,
+    shift_months: int | None = None,
 ) -> list[Image]:
     """Put an edit onto `images` and their RAW+JPEG partners (a pair is one
     shot). `fields` maps a field name to its new value - None or "" clears
-    it; a field that isn't named stays as it is. `shift_seconds` moves every
-    capture time by that much (the selection's camera clock was off).
+    it; a field that isn't named stays as it is. `date_parts` sets single
+    parts of each capture time (only the year, say), the rest of each
+    photo's time staying as it is. `shift_months` and `shift_seconds` move
+    every capture time by that much (the selection's camera clock was off).
+    A full "taken_at" in `fields` wins over parts, parts over a shift.
     Returns every row changed, for the sidecar. Raises MetadataError on a
     value that can't be taken, before anything is changed."""
     parsed = parse_fields(fields)
+    parts = parse_date_parts(date_parts)
     shift = parse_shift(shift_seconds)
+    months = parse_shift_months(shift_months)
 
     targets: dict[str, Image] = {}
     for image in images:
@@ -273,11 +394,19 @@ def apply_edit(
         if partner is not None:
             targets.setdefault(partner.id, partner)
 
+    # Every new time first: one that can't be taken changes nothing.
+    new_times: dict[str, datetime] = {}
+    if "taken_at" not in parsed:
+        for image in targets.values():
+            new = _new_taken_at(image.taken_at, parts, months, shift)
+            if new is not None:
+                new_times[image.id] = new
+
     country = _country(parsed)
     for image in targets.values():
         set_parsed(image, parsed, country)
-        if shift is not None and image.taken_at is not None and "taken_at" not in parsed:
-            image.taken_at = image.taken_at + shift
+        if image.id in new_times:
+            image.taken_at = new_times[image.id]
             _set_edited(image, edited_fields(image) | {"taken_at"})
     return list(targets.values())
 
@@ -396,6 +525,18 @@ def _taken_range(times: list[datetime | None]) -> list[str] | None:
     return [min(known).isoformat(timespec="seconds"), max(known).isoformat(timespec="seconds")]
 
 
+def _taken_parts(times: list[datetime | None]) -> dict[str, Any]:
+    """Each date part where all photos with a date agree on it (null where
+    they don't), and how many photos have no date - what the dialog's date
+    fields start from."""
+    known = [t for t in times if t is not None]
+    parts: dict[str, int | None] = {}
+    for name in DATE_PARTS:
+        seen = {getattr(t, name) for t in known}
+        parts[name] = seen.pop() if len(seen) == 1 else None
+    return {"taken_parts": parts, "undated": len(times) - len(known)}
+
+
 def _summarize(rows: list[dict[str, Any]], edited: bool) -> dict[str, Any]:
     """Each field's value where the rows agree, null where they don't."""
     values: dict[str, Any] = {}
@@ -422,6 +563,7 @@ def summary(images: list[Image]) -> dict[str, Any]:
     rows = [{name: _value(image, name) for name in (*FIELDS, NOTE_FIELD)} for image in images]
     out = _summarize(rows, any(edited_fields(image) for image in images))
     out["taken_range"] = _taken_range([image.taken_at for image in images])
+    out.update(_taken_parts([image.taken_at for image in images]))
     return out
 
 
@@ -479,18 +621,29 @@ def edit_staged(
     fields: dict[str, Any],
     shift_seconds: int | None,
     partner_of: Callable[[Any], Any],
+    *,
+    date_parts: dict[str, Any] | None = None,
+    shift_months: int | None = None,
 ) -> list:
     """apply_edit for files in the import review: the edit goes into each
-    file's meta_edits (and its RAW+JPEG partner's). A shift becomes each
-    file's own new date."""
+    file's meta_edits (and its RAW+JPEG partner's). Date parts and a shift
+    become each file's own new date."""
     parsed = parse_fields(fields)
+    parts = parse_date_parts(date_parts)
     shift = parse_shift(shift_seconds)
+    months = parse_shift_months(shift_months)
     targets: dict[str, Any] = {}
     for f in files:
         targets.setdefault(f.id, f)
         partner = partner_of(f)
         if partner is not None:
             targets.setdefault(partner.id, partner)
+    new_times: dict[str, datetime] = {}
+    if "taken_at" not in parsed:
+        for f in targets.values():
+            new = _new_taken_at(_staged_taken_at(f), parts, months, shift)
+            if new is not None:
+                new_times[f.id] = new
     for f in targets.values():
         edits = staged_edits(f)
         for name, value in parsed.items():
@@ -500,10 +653,8 @@ def edit_staged(
                 edits[name] = list(value) if value is not None else None
             else:
                 edits[name] = value
-        if shift is not None and "taken_at" not in parsed:
-            current = _staged_taken_at(f)
-            if current is not None:
-                edits["taken_at"] = (current + shift).isoformat()
+        if f.id in new_times:
+            edits["taken_at"] = new_times[f.id].isoformat()
         f.meta_edits = json.dumps(edits) if edits else None
     return list(targets.values())
 
@@ -520,7 +671,9 @@ def staged_summary(files: list) -> dict[str, Any]:
         row[NOTE_FIELD] = values.get("caption")
         rows.append(row)
     out = _summarize(rows, any(staged_edits(f) for f in files))
-    out["taken_range"] = _taken_range([_staged_taken_at(f) for f in files])
+    times = [_staged_taken_at(f) for f in files]
+    out["taken_range"] = _taken_range(times)
+    out.update(_taken_parts(times))
     return out
 
 

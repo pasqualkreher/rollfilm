@@ -1086,7 +1086,8 @@ def edit_staged_metadata(
     files, by_id, pairs = _staged_targets(session, payload.file_ids)
     try:
         metadata_edit.edit_staged(
-            files, payload.fields, payload.shift_seconds, lambda f: by_id.get(pairs.get(f.id, ""))
+            files, payload.fields, payload.shift_seconds, lambda f: by_id.get(pairs.get(f.id, "")),
+            date_parts=payload.date_parts, shift_months=payload.shift_months,
         )
     except metadata_edit.MetadataError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None

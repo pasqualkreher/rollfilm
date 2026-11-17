@@ -315,6 +315,12 @@ class MetadataEdit(BaseModel):
     # Moves every photo's capture time by this many seconds (a camera clock
     # that was off). Ignored when "taken_at" is set.
     shift_seconds: int | None = None
+    # Calendar months to move every capture time by (a year = 12), before
+    # shift_seconds.
+    shift_months: int | None = None
+    # Single parts of each capture time to set ({"year": 1987}); each photo
+    # keeps the parts left out. Wins over a shift, loses to "taken_at".
+    date_parts: dict[str, Any] | None = None
 
 
 class MetadataIds(BaseModel):
@@ -323,9 +329,11 @@ class MetadataIds(BaseModel):
 
 class StagedMetadataEdit(BaseModel):
     file_ids: list[str]
-    # As MetadataEdit.fields / shift_seconds.
+    # As MetadataEdit.fields / shift_seconds / shift_months / date_parts.
     fields: dict[str, Any] = Field(default_factory=dict)
     shift_seconds: int | None = None
+    shift_months: int | None = None
+    date_parts: dict[str, Any] | None = None
 
 
 class StagedMetadataIds(BaseModel):
@@ -345,6 +353,11 @@ class MetadataSummaryOut(BaseModel):
     # First and last capture time of the photos (wall clock), for the
     # "near in time" place suggestions.
     taken_range: list[str] | None = None
+    # Each part of the capture time (year, month, day, hour, minute, second)
+    # where all photos with a date agree on it, null where they don't.
+    taken_parts: dict[str, int | None] | None = None
+    # Photos without a capture time.
+    undated: int = 0
 
 
 class SuggestedPlace(BaseModel):

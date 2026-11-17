@@ -54,7 +54,7 @@ export function importMetadataSource(sessionId: string, onDone: () => void): Met
   return {
     key: `import:${sessionId}`,
     summary: (ids) => api.import.stagedMetadataSummary(sessionId, ids),
-    edit: (ids, fields, shift) => api.import.editStagedMetadata(sessionId, ids, fields, shift),
+    edit: (ids, fields, date) => api.import.editStagedMetadata(sessionId, ids, fields, date),
     revert: (ids) => api.import.revertStagedMetadata(sessionId, ids).then(() => 0),
     refresh: () => onDone(),
     note: "Applied when the photos are imported. The original files stay unchanged.",

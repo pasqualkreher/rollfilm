@@ -23,6 +23,7 @@ import type {
   MetaField,
   MetadataSuggestions,
   MetadataSummary,
+  DateEdit,
   PlaceHit,
   ImmichActivity,
   ImmichPushResult,
@@ -407,6 +408,16 @@ function uploadBatch(
   });
 }
 
+// The date side of a metadata edit, as the backend's MetadataEdit takes it.
+function dateEditBody(date: DateEdit) {
+  const parts = date.dateParts && Object.keys(date.dateParts).length > 0 ? date.dateParts : null;
+  return {
+    date_parts: parts,
+    shift_months: date.shiftMonths || null,
+    shift_seconds: date.shiftSeconds || null,
+  };
+}
+
 export const api = {
   images: {
     list(filters: LibraryFilters, page?: { limit: number; offset: number }): Promise<ImageOut[]> {
@@ -479,11 +490,11 @@ export const api = {
     editMetadata(
       image_ids: string[],
       fields: Partial<Record<MetaField, unknown>>,
-      shift_seconds?: number
+      date: DateEdit = {}
     ): Promise<ImageOut[]> {
       return request(`/images/metadata`, {
         method: "POST",
-        body: JSON.stringify({ image_ids, fields, shift_seconds: shift_seconds || null }),
+        body: JSON.stringify({ image_ids, fields, ...dateEditBody(date) }),
       });
     },
     revertMetadata(image_ids: string[]): Promise<{ images: ImageOut[]; unreadable: number }> {
@@ -1428,11 +1439,11 @@ export const api = {
       sessionId: string,
       fileIds: string[],
       fields: Partial<Record<MetaField, unknown>>,
-      shift_seconds?: number
+      date: DateEdit = {}
     ): Promise<StagedFileOut[]> {
       return request(`/import/sessions/${sessionId}/files/metadata`, {
         method: "POST",
-        body: JSON.stringify({ file_ids: fileIds, fields, shift_seconds: shift_seconds || null }),
+        body: JSON.stringify({ file_ids: fileIds, fields, ...dateEditBody(date) }),
       });
     },
     revertStagedMetadata(sessionId: string, fileIds: string[]): Promise<StagedFileOut[]> {

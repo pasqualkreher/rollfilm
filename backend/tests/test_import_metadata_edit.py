@@ -123,6 +123,30 @@ def test_a_shift_moves_each_file_from_its_own_date_and_keeps_the_zone(db, dirs):
     assert metadata_edit.staged_edits(jpg)["taken_at"] == "2026-07-01T10:00:00+02:00"
 
 
+
+def test_date_parts_in_the_review_keep_the_rest_and_reach_the_commit(db, dirs):
+    session, jpg, raw = _pair(db, dirs / "archive")
+    routes.edit_staged_metadata(
+        session.id, schemas.StagedMetadataEdit(file_ids=[jpg.id], date_parts={"year": 1987}), db, _User()
+    )
+    db.refresh(jpg)
+    db.refresh(raw)
+    for row in (jpg, raw):
+        assert metadata_edit.staged_edits(row)["taken_at"] == "1987-07-01T12:00:00+02:00"
+    summary = routes.staged_metadata_summary(session.id, schemas.StagedMetadataIds(file_ids=[jpg.id]), db, _User())
+    assert summary["taken_parts"]["year"] == 1987
+    assert summary["taken_parts"]["day"] == 1
+    assert summary["undated"] == 0
+
+    routes.edit_staged_metadata(
+        session.id, schemas.StagedMetadataEdit(file_ids=[jpg.id], shift_months=14), db, _User()
+    )
+    images = import_pipeline.commit_import_session(db, session, 1)
+    for image in images:
+        assert image.taken_at.replace(tzinfo=None) == datetime(1988, 9, 1, 12, 0)
+        assert "taken_at" in metadata_edit.edited_fields(image)
+
+
 def test_commit_carries_the_edit_as_hand_edits(db, dirs):
     session, jpg, raw = _pair(db, dirs / "archive")
     routes.edit_staged_metadata(

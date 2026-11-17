@@ -1043,6 +1043,17 @@ export type MetaField =
   | "focal_length"
   | "description";
 
+// The parts of a capture time the dialog sets one by one.
+export type DatePart = "year" | "month" | "day" | "hour" | "minute" | "second";
+
+// The date side of an edit: single parts to set (the rest of each photo's
+// time stays), or a shift by calendar months and seconds.
+export interface DateEdit {
+  dateParts?: Partial<Record<DatePart, number>>;
+  shiftMonths?: number;
+  shiftSeconds?: number;
+}
+
 export interface MetadataSummary {
   count: number;
   // A field's value where the photos agree, null where they don't (and in
@@ -1054,6 +1065,10 @@ export interface MetadataSummary {
   place: string | null;
   // First and last capture time (wall clock), for "near in time" places.
   taken_range?: [string, string] | null;
+  // Each part of the capture time where all photos with a date agree, null
+  // where they don't; and how many photos have no date.
+  taken_parts?: Record<DatePart, number | null> | null;
+  undated?: number;
 }
 
 export interface SuggestedPlace {

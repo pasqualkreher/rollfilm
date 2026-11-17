@@ -1114,6 +1114,7 @@ def edit_metadata(
         changed = metadata_edit.apply_edit(
             images, payload.fields, payload.shift_seconds,
             lambda image: _pair_partner(db, current_user.id, image),
+            date_parts=payload.date_parts, shift_months=payload.shift_months,
         )
     except metadata_edit.MetadataError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None

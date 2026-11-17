@@ -3,7 +3,7 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { api } from "../api/client";
-import type { MetaField, MetadataSummary, PlaceHit, SuggestedPlace } from "../api/types";
+import type { DateEdit, DatePart, MetaField, MetadataSummary, PlaceHit, SuggestedPlace } from "../api/types";
 import { useEscapeToClose, useEnterToConfirm } from "../utils/modalKeys";
 import { formatShutterSpeed } from "../utils/photoMeta";
 import { useAppDialogs } from "./AppDialogs";
@@ -246,7 +246,46 @@ function PlaceSearch({
   );
 }
 
-type DateMode = "keep" | "set" | "shift";
+type DateMode = "set" | "shift";
+
+// The date set part by part: a part left untouched stays as each photo has
+// it (only the year wrong on old scans: type the year, nothing else moves).
+const PART_RANGE: Record<DatePart, [number, number]> = {
+  year: [1800, 2200],
+  month: [1, 12],
+  day: [1, 31],
+  hour: [0, 23],
+  minute: [0, 59],
+  second: [0, 59],
+};
+const PART_NAME: Record<DatePart, string> = {
+  year: "Year",
+  month: "Month",
+  day: "Day",
+  hour: "Hour",
+  minute: "Minute",
+  second: "Second",
+};
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const lastDay = (year: number, month: number) => new Date(year, month, 0).getDate();
+const LONG_DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "long", year: "numeric" });
+
+// A typed part as a number, null for an empty field, NaN when it isn't one
+// the part can take.
+function partNumber(part: DatePart, text: string | undefined): number | null {
+  const t = (text ?? "").trim();
+  if (!t) return null;
+  if (!/^\d+$/.test(t)) return NaN;
+  const n = Number(t);
+  const [lo, hi] = PART_RANGE[part];
+  return n >= lo && n <= hi ? n : NaN;
+}
+
+function partShown(part: DatePart, n: number): string {
+  if (part === "year" || part === "month") return String(n);
+  return pad2(n);
+}
 
 // Where the photos' metadata is read and written: the library (the
 // default), or the files of an import review (useMetadataDialog's caller
@@ -254,7 +293,7 @@ type DateMode = "keep" | "set" | "shift";
 export interface MetadataSource {
   key: string;
   summary: (ids: string[]) => Promise<MetadataSummary>;
-  edit: (ids: string[], fields: Partial<Record<MetaField, unknown>>, shiftSeconds?: number) => Promise<unknown>;
+  edit: (ids: string[], fields: Partial<Record<MetaField, unknown>>, date?: DateEdit) => Promise<unknown>;
   // How many files could not be read (and kept their edit).
   revert: (ids: string[]) => Promise<number>;
   refresh: (queryClient: QueryClient) => void;
@@ -265,7 +304,7 @@ export interface MetadataSource {
 const LIBRARY_SOURCE: MetadataSource = {
   key: "library",
   summary: (ids) => api.images.metadataSummary(ids),
-  edit: (ids, fields, shift) => api.images.editMetadata(ids, fields, shift),
+  edit: (ids, fields, date) => api.images.editMetadata(ids, fields, date),
   revert: (ids) => api.images.revertMetadata(ids).then((r) => r.unreadable),
   refresh: (queryClient) => {
     for (const key of ["images", "image", "facets", "album", "smart-album-images", "library-stats", "metadata-summary"]) {
@@ -313,9 +352,10 @@ export function MetadataDialog({
   // The typed values of the fields changed so far; a field not in here is
   // left as each photo has it.
   const [draft, setDraft] = useState<Partial<Record<TextField, string>>>({});
-  const [dateMode, setDateMode] = useState<DateMode>(many ? "keep" : "set");
-  const [dateText, setDateText] = useState<string | null>(null);
-  const [shift, setShift] = useState({ sign: 1, days: "", hours: "", minutes: "" });
+  const [dateMode, setDateMode] = useState<DateMode>("set");
+  // The date parts typed so far; a part not in here stays as each photo has it.
+  const [parts, setParts] = useState<Partial<Record<DatePart, string>>>({});
+  const [shift, setShift] = useState({ sign: 1, years: "", months: "", days: "", hours: "", minutes: "" });
   // undefined = the place stays; null = taken off; a point = set there.
   const [gps, setGps] = useState<LatLon | null | undefined>(undefined);
   const [gpsLabel, setGpsLabel] = useState<string | null>(null);
@@ -325,7 +365,6 @@ export function MetadataDialog({
   const values = summary?.values ?? {};
   const mixed = useMemo(() => new Set(summary?.mixed ?? []), [summary]);
   const storedGps = (values.gps as LatLon | null | undefined) ?? null;
-  const storedDate = (values.taken_at as string | null | undefined) ?? null;
   const shownGps = gps === undefined ? storedGps : gps;
   const placeText =
     gps === undefined
@@ -341,16 +380,62 @@ export function MetadataDialog({
   const shiftSeconds =
     shift.sign *
     ((Number(shift.days) || 0) * 86400 + (Number(shift.hours) || 0) * 3600 + (Number(shift.minutes) || 0) * 60);
-  // The date field as typed, or the stored one (seconds kept).
-  const dateValue = dateText ?? (storedDate ? storedDate.slice(0, 19) : "");
-  const dateChanged = dateMode === "set" && dateText !== null && dateText !== "" && dateText !== storedDate?.slice(0, 19);
+  const shiftMonths = shift.sign * ((Number(shift.years) || 0) * 12 + (Number(shift.months) || 0));
+  const shifting = dateMode === "shift" && (shiftSeconds !== 0 || shiftMonths !== 0);
+
+  // Each date part where the photos with a date agree (null where they
+  // don't), and how many have none.
+  const storedParts = summary?.taken_parts ?? null;
+  const undated = summary?.undated ?? 0;
+  const dated = (summary?.count ?? 0) - undated;
+  const partMixed = (p: DatePart) => dated > 0 && (storedParts?.[p] ?? null) === null;
+  const partStored = (p: DatePart) => storedParts?.[p] ?? null;
+  // The parts typed that really change something (typed back to the stored
+  // value, or emptied = not an edit), and whether any typed part is invalid.
+  const partEdits: Partial<Record<DatePart, number>> = {};
+  let partsInvalid = false;
+  if (dateMode === "set") {
+    for (const [p, text] of Object.entries(parts) as [DatePart, string][]) {
+      const n = partNumber(p, text);
+      if (Number.isNaN(n)) partsInvalid = true;
+      else if (n !== null && (partMixed(p) || n !== partStored(p))) partEdits[p] = n;
+    }
+  }
+  const editedParts = (Object.keys(PART_RANGE) as DatePart[]).filter((p) => partEdits[p] !== undefined);
+  const dateChanged = editedParts.length > 0;
   // The typed fields that really differ from what the photos have (typed
   // back to the old value = not an edit).
   const typed = (Object.entries(draft) as [TextField, string][]).filter(
     ([key, text]) => mixed.has(key) || text.trim() !== shown(key, values[key]).trim()
   );
   const changed =
-    typed.length > 0 || gps !== undefined || dateChanged || (dateMode === "shift" && shiftSeconds !== 0);
+    typed.length > 0 || gps !== undefined || dateChanged || shifting;
+
+  // What the date will be: one photo (or a selection agreeing on every
+  // part) shows the new date itself; otherwise the parts that change.
+  function datePreview(): string | null {
+    if (!dateChanged) return null;
+    const merged = Object.fromEntries(
+      (Object.keys(PART_RANGE) as DatePart[]).map((p) => [p, partEdits[p] ?? partStored(p)])
+    ) as Record<DatePart, number | null>;
+    const whole = merged.year !== null && merged.month !== null && merged.day !== null;
+    const reaches = dated > 0 || (partEdits.year !== undefined && partEdits.month !== undefined && partEdits.day !== undefined);
+    if (!reaches) return null;
+    // A selection mixing dated and undated photos: the undated ones would
+    // take 00:00 for a time left alone - list the parts instead.
+    if (whole && (undated === 0 || dated === 0) && (Object.values(merged).every((v) => v !== null) || dated === 0)) {
+      const day = Math.min(merged.day!, lastDay(merged.year!, merged.month!));
+      const at = new Date(merged.year!, merged.month! - 1, day);
+      at.setFullYear(merged.year!);
+      const time = `${pad2(merged.hour ?? 0)}:${pad2(merged.minute ?? 0)}:${pad2(merged.second ?? 0)}`;
+      return `${many ? `All ${ids.length} photos: ` : "Becomes "}${LONG_DAY.format(at)}, ${time}`;
+    }
+    const list = editedParts
+      .map((p) => `${PART_NAME[p].toLowerCase()} ${p === "month" ? MONTHS[partEdits[p]! - 1] : partShown(p, partEdits[p]!)}`)
+      .join(", ");
+    const short = partEdits.day !== undefined && partEdits.day > 28 ? " (the last day in a shorter month)" : "";
+    return `Sets ${list}${short} on ${many ? `all ${ids.length} photos` : "the photo"}; the rest stays as ${many ? "each has it" : "it is"}.`;
+  }
 
   useEscapeToClose(!closing, () => {
     if (!busy) onClose();
@@ -366,14 +451,18 @@ export function MetadataDialog({
   }
 
   async function save() {
-    if (busy || !changed) return;
+    if (busy || !changed || partsInvalid) return;
     const fields: Partial<Record<MetaField, unknown>> = Object.fromEntries(typed);
     if (gps !== undefined) fields.gps = gps;
-    if (dateChanged) fields.taken_at = dateText;
+    const date: DateEdit = dateChanged
+      ? { dateParts: partEdits }
+      : shifting
+        ? { shiftMonths, shiftSeconds }
+        : {};
     setBusy(true);
     setError(null);
     try {
-      await source.edit(ids, fields, dateMode === "shift" ? shiftSeconds : undefined);
+      await source.edit(ids, fields, date);
       refresh();
       onClose();
     } catch (e) {
@@ -405,6 +494,51 @@ export function MetadataDialog({
       setError((e as Error).message || "Could not restore from the file.");
       setBusy(false);
     }
+  }
+
+  function partInput(p: DatePart, label: string): ReactNode {
+    const typedText = parts[p];
+    const stored = partStored(p);
+    const value = typedText ?? (stored !== null ? partShown(p, stored) : "");
+    const invalid = typedText !== undefined && Number.isNaN(partNumber(p, typedText));
+    const mixedHere = partMixed(p) && typedText === undefined;
+    const common = {
+      "aria-label": label,
+      disabled: !summary || dateMode !== "set",
+      className: [mixedHere ? "is-mixed" : "", invalid ? "is-invalid" : ""].filter(Boolean).join(" ") || undefined,
+      "aria-invalid": invalid || undefined,
+    };
+    if (p === "month") {
+      return (
+        <select
+          {...common}
+          className={["meta-part-month", common.className].filter(Boolean).join(" ")}
+          value={value}
+          onChange={(e) => setParts((d) => ({ ...d, month: e.target.value }))}
+        >
+          <option value="">{partMixed(p) ? "Mixed" : "Month"}</option>
+          {MONTHS.map((m, i) => (
+            <option key={m} value={String(i + 1)}>
+              {m}
+            </option>
+          ))}
+        </select>
+      );
+    }
+    const placeholder = partMixed(p) ? "–" : p === "year" ? "yyyy" : p === "day" ? "dd" : p === "hour" ? "hh" : p === "minute" ? "mm" : "ss";
+    return (
+      <input
+        {...common}
+        type="text"
+        inputMode="numeric"
+        maxLength={p === "year" ? 4 : 2}
+        className={[`meta-part-${p === "year" ? "year" : "short"}`, common.className].filter(Boolean).join(" ")}
+        value={value}
+        placeholder={placeholder}
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => setParts((d) => ({ ...d, [p]: e.target.value.replace(/\D/g, "") }))}
+      />
+    );
   }
 
   function textInput(row: { key: TextField; label: string; placeholder?: string; area?: boolean }): ReactNode {
@@ -472,7 +606,7 @@ export function MetadataDialog({
             <div className="meta-section-label">Date and time</div>
             {many && (
               <span className="segmented meta-seg" role="group" aria-label="Date">
-                {(["keep", "set", "shift"] as DateMode[]).map((m) => (
+                {(["set", "shift"] as DateMode[]).map((m) => (
                   <button
                     key={m}
                     type="button"
@@ -480,24 +614,54 @@ export function MetadataDialog({
                     className={dateMode === m ? "active" : ""}
                     onClick={() => setDateMode(m)}
                   >
-                    {m === "keep" ? "Keep" : m === "set" ? "Set all to" : "Shift by"}
+                    {m === "set" ? "Set" : "Shift by"}
                   </button>
                 ))}
               </span>
             )}
-            {/* Both rows always there for a selection, the one not chosen
-                greyed out: switching moves nothing. */}
-            <div className="meta-row" style={dateMode === "set" ? undefined : { opacity: 0.45 }}>
-              <label htmlFor="meta-taken">{many ? "Set to" : "Taken"}</label>
-              <input
-                id="meta-taken"
-                type="datetime-local"
-                step={1}
-                value={dateValue}
-                disabled={!summary || dateMode !== "set"}
-                placeholder={mixed.has("taken_at") ? "Mixed" : ""}
-                onChange={(e) => setDateText(e.target.value)}
-              />
+            {/* Both the parts and the shift always there for a selection, the
+                one not chosen greyed out: switching moves nothing. */}
+            <div style={dateMode === "set" ? undefined : { opacity: 0.45 }} className="meta-date">
+              <div className="meta-row">
+                <label>Date</label>
+                <span className="meta-date-parts">
+                  {partInput("day", "Day")}
+                  {partInput("month", "Month")}
+                  {partInput("year", "Year")}
+                </span>
+              </div>
+              <div className="meta-row">
+                <label>Time</label>
+                <span className="meta-date-parts">
+                  {partInput("hour", "Hour")}
+                  <span className="meta-date-sep">:</span>
+                  {partInput("minute", "Minute")}
+                  <span className="meta-date-sep">:</span>
+                  {partInput("second", "Second")}
+                </span>
+              </div>
+              {dateMode === "set" && summary && (
+                <div className="meta-date-notes">
+                  {partsInvalid ? (
+                    <span className="meta-hint meta-hint--error">A date part is out of range.</span>
+                  ) : (
+                    datePreview() && <span className="meta-hint">{datePreview()}</span>
+                  )}
+                  {many && dated > 0 && (Object.keys(PART_RANGE) as DatePart[]).some(partMixed) && !dateChanged && (
+                    <span className="meta-hint">
+                      Parts shown as “–” differ between the photos and stay as each has them. Type into one to change
+                      only that part — the year alone, say.
+                    </span>
+                  )}
+                  {undated > 0 && (
+                    <span className="meta-hint">
+                      {dated === 0
+                        ? `No date yet: set day, month and year${many ? " to give all of them one" : ""}.`
+                        : `${undated} photo${undated === 1 ? " has" : "s have"} no date and only take${undated === 1 ? "s" : ""} one once day, month and year are set.`}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             {many && (
               <div className="meta-row" style={dateMode === "shift" ? undefined : { opacity: 0.45 }}>
@@ -512,7 +676,7 @@ export function MetadataDialog({
                     <option value={1}>Later</option>
                     <option value={-1}>Earlier</option>
                   </select>
-                  {(["days", "hours", "minutes"] as const).map((unit) => (
+                  {(["years", "months", "days", "hours", "minutes"] as const).map((unit) => (
                     <label key={unit} className="meta-shift-unit">
                       <input
                         type="number"
@@ -524,7 +688,7 @@ export function MetadataDialog({
                         placeholder="0"
                         onChange={(e) => setShift((s) => ({ ...s, [unit]: e.target.value }))}
                       />
-                      {unit === "days" ? "d" : unit === "hours" ? "h" : "min"}
+                      {{ years: "y", months: "mo", days: "d", hours: "h", minutes: "min" }[unit]}
                     </label>
                   ))}
                 </span>
@@ -605,7 +769,7 @@ export function MetadataDialog({
             <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
               Cancel
             </button>
-            <button type="submit" className="btn primary" disabled={busy || !changed}>
+            <button type="submit" className="btn primary" disabled={busy || !changed || partsInvalid}>
               {busy ? "Saving…" : "Save"}
             </button>
           </div>
